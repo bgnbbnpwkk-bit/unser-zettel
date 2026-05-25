@@ -36,7 +36,12 @@ function toTemplateId(name) {
 }
 
 export default function App() {
-  const [user, setUser] = useState(() => localStorage.getItem('zettel-user') || '')
+  const [user, setUser] = useState(() => {
+    const saved = localStorage.getItem('zettel-user')
+    if (saved === 'Marc' || saved === 'Melli') return saved
+    localStorage.removeItem('zettel-user')
+    return ''
+  })
   const [items, setItems] = useState([])
   const [templates, setTemplates] = useState([])
   const [loading, setLoading] = useState(true)
@@ -49,6 +54,8 @@ export default function App() {
   const [suggestions, setSuggestions] = useState([])
   const [isLandscape, setIsLandscape] = useState(false)
   const inputRef = useRef(null)
+
+  const closeAll = () => { setShowAdd(false); setShowFavorites(false); setShowInfo(false); setSuggestions([]) }
 
   const selectUser = (name) => {
     localStorage.setItem('zettel-user', name)
@@ -110,12 +117,26 @@ export default function App() {
   const toggleItem = async item => updateDoc(doc(db, 'items', item.id), { checked: !item.checked })
   const removeItem = async id => deleteDoc(doc(db, 'items', id))
   const clearChecked = async () => Promise.all(items.filter(i => i.checked).map(i => deleteDoc(doc(db, 'items', i.id))))
-  const toggleFavorite = async (tmpl) => updateDoc(doc(db, 'templates', tmpl.id), { favorite: !tmpl.favorite })
-  const getTemplate = name => templates.find(t => t.name.toLowerCase() === name.toLowerCase())
+
+  const toggleFavorite = async (item) => {
+    const tmpl = templates.find(t => t.name.toLowerCase() === item.name.toLowerCase())
+    if (tmpl) {
+      await updateDoc(doc(db, 'templates', tmpl.id), { favorite: !tmpl.favorite })
+    } else {
+      await setDoc(doc(db, 'templates', toTemplateId(item.name)), {
+        name: item.name, category: item.category,
+        favorite: true, usedCount: 1, lastUsed: serverTimestamp()
+      })
+    }
+  }
+
+  const isFavorite = (name) => templates.some(t => t.name.toLowerCase() === name.toLowerCase() && t.favorite)
 
   const uncheckedCount = items.filter(i => !i.checked).length
   const checkedCount   = items.filter(i => i.checked).length
   const favorites      = templates.filter(t => t.favorite)
+  const favsOnList     = items.filter(i => isFavorite(i.name))
+  const favsToAdd      = favorites.filter(t => !items.some(i => i.name.toLowerCase() === t.name.toLowerCase() && !i.checked))
 
   const filtered =
     activeFilter === 'all'     ? items :
@@ -168,19 +189,13 @@ export default function App() {
             <div style={S.subtitle}>{loading ? 'Laden…' : `${uncheckedCount} offen · ${checkedCount} erledigt`}</div>
           </div>
           <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-            <button style={S.favBtn} onClick={() => { setShowInfo(true); setShowAdd(false); setShowFavorites(false) }}>ℹ️</button>
-            <button style={S.favBtn} onClick={() => { setShowFavorites(true); setShowAdd(false); setShowInfo(false) }}>
+            <button style={S.favBtn} onClick={() => { closeAll(); setShowInfo(true) }}>ℹ️</button>
+            <button style={S.favBtn} onClick={() => { closeAll(); setShowFavorites(true) }}>
               ⭐{favorites.length > 0 && <span style={S.badge}>{favorites.length}</span>}
             </button>
             <div style={S.avatars}>
               {avatarOrder.map((u, i) => (
-                <div key={u.name} style={{
-                  ...S.avatar,
-                  background: u.color,
-                  marginLeft: i > 0 ? -6 : 0,
-                  opacity: u.name === user ? 1 : 0.5,
-                  zIndex: i === 0 ? 2 : 1,
-                }}>
+                <div key={u.name} style={{...S.avatar, background:u.color, marginLeft:i>0?-6:0, opacity:u.name===user?1:0.5, zIndex:i===0?2:1}}>
                   {u.name}
                 </div>
               ))}
@@ -212,19 +227,16 @@ export default function App() {
                   <span style={S.catLabel}>{cat.emoji} {cat.label}</span>
                   <span style={S.catCount}>{catItems.length}</span>
                 </div>
-                {catItems.map(item => {
-                  const tmpl = getTemplate(item.name)
-                  return (
-                    <ItemRow key={item.id} item={item}
-                      onToggle={() => toggleItem(item)}
-                      onRemove={() => removeItem(item.id)}
-                      catColor={cat.color}
-                      addedByColor={getUserColor(item.addedBy)}
-                      isFav={tmpl?.favorite || false}
-                      onToggleFav={() => tmpl && toggleFavorite(tmpl)}
-                    />
-                  )
-                })}
+                {catItems.map(item => (
+                  <ItemRow key={item.id} item={item}
+                    onToggle={() => toggleItem(item)}
+                    onRemove={() => removeItem(item.id)}
+                    catColor={cat.color}
+                    addedByColor={getUserColor(item.addedBy)}
+                    isFav={isFavorite(item.name)}
+                    onToggleFav={() => toggleFavorite(item)}
+                  />
+                ))}
               </div>
             )
           })}
@@ -266,7 +278,7 @@ export default function App() {
                 ))}
               </div>
               <div style={S.actions}>
-                <button style={S.cancel} onClick={() => { setShowAdd(false); setSuggestions([]) }}>Abbrechen</button>
+                <button style={S.cancel} onClick={closeAll}>Abbrechen</button>
                 <button style={S.confirm} onClick={() => addItem()}>Hinzufügen</button>
               </div>
             </div>
@@ -278,34 +290,45 @@ export default function App() {
             <div style={S.panelInner}>
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
                 <span style={{ color:'#fff', fontWeight:700, fontSize:16 }}>⭐ Favoriten</span>
-                <button style={{...S.cancel, flex:'none', padding:'6px 14px'}} onClick={() => setShowFavorites(false)}>✕</button>
+                <button style={{...S.cancel, flex:'none', padding:'6px 14px'}} onClick={closeAll}>✕</button>
               </div>
-              {favorites.length === 0 ? (
-                <div style={{ color:'rgba(255,255,255,0.4)', fontSize:13, textAlign:'center', padding:'24px 0' }}>
-                  Noch keine Favoriten. Tippe ☆ auf einem Artikel.
-                </div>
-              ) : (
-                <div style={{ display:'flex', flexDirection:'column', gap:6, maxHeight:300, overflowY:'auto' }}>
-                  {favorites.map(t => {
-                    const cat = getCategoryById(t.category)
-                    const onList = items.some(i => i.name.toLowerCase()===t.name.toLowerCase() && !i.checked)
-                    return (
-                      <button key={t.id} disabled={onList}
-                        style={{...S.tmplItem, opacity:onList?0.4:1}}
-                        onClick={() => { if(!onList){ addItem(t.name, t.category); setShowFavorites(false) } }}>
-                        <span style={{ fontSize:20 }}>{cat.emoji}</span>
-                        <span style={{ flex:1, textAlign:'left', color:'#fff', fontSize:15, fontWeight:500 }}>{t.name}</span>
-                        {onList
-                          ? <span style={{ fontSize:11, color:'rgba(255,255,255,0.3)' }}>bereits drauf</span>
-                          : <span style={{ fontSize:20, color:'#818cf8' }}>+</span>
-                        }
-                      </button>
-                    )
-                  })}
-                </div>
-              )}
-              <div style={{ marginTop:10, color:'rgba(255,255,255,0.25)', fontSize:11, textAlign:'center' }}>
-                Tippe ☆ auf einem Artikel um ihn zu favorisieren
+              <div style={{ display:'flex', flexDirection:'column', gap:16, maxHeight:380, overflowY:'auto' }}>
+                {favsOnList.length > 0 && (
+                  <div>
+                    <div style={S.infoSection}>Auf dem Zettel</div>
+                    {favsOnList.map(item => {
+                      const cat = getCategoryById(item.category)
+                      return (
+                        <div key={item.id} style={{...S.tmplItem, cursor:'default'}}>
+                          <span style={{ fontSize:18 }}>{cat.emoji}</span>
+                          <span style={{ flex:1, color:'#fff', fontSize:14, fontWeight:500 }}>{item.name}</span>
+                          <span style={{ fontSize:10, color: getUserColor(item.addedBy)+'99', fontWeight:600 }}>{item.addedBy}</span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+                {favsToAdd.length > 0 && (
+                  <div>
+                    <div style={S.infoSection}>Hinzufügen</div>
+                    {favsToAdd.map(t => {
+                      const cat = getCategoryById(t.category)
+                      return (
+                        <button key={t.id} style={S.tmplItem}
+                          onClick={() => { addItem(t.name, t.category); closeAll() }}>
+                          <span style={{ fontSize:18 }}>{cat.emoji}</span>
+                          <span style={{ flex:1, textAlign:'left', color:'#fff', fontSize:14, fontWeight:500 }}>{t.name}</span>
+                          <span style={{ fontSize:20, color:'#818cf8' }}>+</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+                {favorites.length === 0 && (
+                  <div style={{ color:'rgba(255,255,255,0.4)', fontSize:13, textAlign:'center', padding:'24px 0' }}>
+                    Noch keine Favoriten. Tippe ☆ auf einem Artikel.
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -316,24 +339,28 @@ export default function App() {
             <div style={S.panelInner}>
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
                 <span style={{ color:'#fff', fontWeight:700, fontSize:16 }}>ℹ️ Über diese App</span>
-                <button style={{...S.cancel, flex:'none', padding:'6px 14px'}} onClick={() => setShowInfo(false)}>✕</button>
+                <button style={{...S.cancel, flex:'none', padding:'6px 14px'}} onClick={closeAll}>✕</button>
               </div>
               <div style={{ display:'flex', flexDirection:'column', gap:16, maxHeight:360, overflowY:'auto' }}>
                 <div>
                   <div style={S.infoSection}>App</div>
-                  <div style={{ color:'#fff', fontWeight:600 }}>🛒 Unser Zettel <span style={{ color:'rgba(255,255,255,0.4)', fontWeight:400, fontSize:12 }}>v1.1.0</span></div>
+                  <div style={{ color:'#fff', fontWeight:600 }}>🛒 Unser Zettel <span style={{ color:'rgba(255,255,255,0.4)', fontWeight:400, fontSize:12 }}>v1.2.0</span></div>
                   <div style={{ color:'rgba(255,255,255,0.5)', fontSize:12, marginTop:2 }}>Gemeinsamer Einkaufszettel für Marc & Melli</div>
                 </div>
                 <div>
                   <div style={S.infoSection}>Features</div>
-                  {['Echtzeit-Sync zwischen Geräten','Artikel mit Kategorien','Favoriten & Verlauf','Autocomplete beim Tippen','Hochformat-Optimierung'].map(f => (
+                  {['Echtzeit-Sync zwischen Geräten','Artikel mit Kategorien','Favoriten & Verlauf','Autocomplete beim Tippen','Onboarding Screen','Hochformat-Optimierung'].map(f => (
                     <div key={f} style={{ color:'rgba(255,255,255,0.7)', fontSize:13, paddingBottom:4 }}>✓ {f}</div>
                   ))}
                 </div>
                 <div>
                   <div style={S.infoSection}>Changelog</div>
-                  <div style={{ color:'rgba(255,255,255,0.5)', fontSize:11, marginBottom:4 }}>v1.1.0 – 25.05.2026</div>
-                  {['Favoriten & Verlauf','Autocomplete','FAB immer sichtbar','Onboarding Screen','Avatare mit Namen','Info Screen'].map(c => (
+                  <div style={{ color:'rgba(255,255,255,0.5)', fontSize:11, marginBottom:4 }}>v1.2.0 – 25.05.2026</div>
+                  {['Bugfixes: Scrollen, Favoriten, Onboarding','Favoriten-Panel überarbeitet','Info Screen'].map(c => (
+                    <div key={c} style={{ color:'rgba(255,255,255,0.7)', fontSize:12, paddingBottom:3 }}>+ {c}</div>
+                  ))}
+                  <div style={{ color:'rgba(255,255,255,0.5)', fontSize:11, marginTop:8, marginBottom:4 }}>v1.1.0 – 25.05.2026</div>
+                  {['Favoriten & Verlauf','Autocomplete','FAB immer sichtbar','Onboarding Screen','Avatare mit Namen'].map(c => (
                     <div key={c} style={{ color:'rgba(255,255,255,0.7)', fontSize:12, paddingBottom:3 }}>+ {c}</div>
                   ))}
                   <div style={{ color:'rgba(255,255,255,0.5)', fontSize:11, marginTop:8, marginBottom:4 }}>v1.0.0 – 25.05.2026</div>
@@ -386,7 +413,7 @@ function ItemRow({ item, onToggle, onRemove, catColor, addedByColor, isFav, onTo
 }
 
 const S = {
-  root: { position:'fixed', inset:0, background:'linear-gradient(135deg,#0f0c1a 0%,#1a1030 50%,#0d1829 100%)', display:'flex', alignItems:'center', justifyContent:'center', fontFamily:"'Outfit',sans-serif", overflow:'hidden' },
+  root: { position:'fixed', inset:0, background:'linear-gradient(135deg,#0f0c1a 0%,#1a1030 50%,#0d1829 100%)', display:'flex', alignItems:'center', justifyContent:'center', fontFamily:"'Outfit',sans-serif", overflow:'hidden', overscrollBehavior:'none' },
   blob1: { position:'absolute', top:-100, right:-80, width:350, height:350, borderRadius:'50%', background:'radial-gradient(circle,rgba(129,140,248,0.15) 0%,transparent 70%)', pointerEvents:'none' },
   blob2: { position:'absolute', bottom:-80, left:-60, width:300, height:300, borderRadius:'50%', background:'radial-gradient(circle,rgba(251,113,133,0.12) 0%,transparent 70%)', pointerEvents:'none' },
   frame: { width:'100%', maxWidth:390, height:'100%', background:'rgba(15,12,26,0.85)', backdropFilter:'blur(20px)', border:'1px solid rgba(255,255,255,0.08)', boxShadow:'0 30px 80px rgba(0,0,0,0.6)', display:'flex', flexDirection:'column', overflow:'hidden', position:'relative' },
@@ -403,7 +430,7 @@ const S = {
   badge: { background:'#fbbf24', color:'#000', borderRadius:'50%', width:16, height:16, fontSize:9, fontWeight:700, display:'flex', alignItems:'center', justifyContent:'center' },
   filterRow: { display:'flex', gap:6, padding:'10px 16px', overflowX:'auto', scrollbarWidth:'none', flexShrink:0 },
   chip: { padding:'5px 12px', borderRadius:20, fontSize:12, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' },
-  list: { flex:1, overflowY:'auto', padding:'8px 16px 80px', scrollbarWidth:'none' },
+  list: { flex:1, overflowY:'auto', padding:'8px 16px 80px', scrollbarWidth:'none', overscrollBehavior:'contain' },
   empty: { display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', paddingTop:80 },
   catGroup: { marginBottom:20 },
   catHeader: { display:'flex', alignItems:'center', gap:6, marginBottom:8, paddingLeft:2 },
@@ -429,6 +456,6 @@ const S = {
   actions: { display:'flex', gap:8 },
   cancel: { flex:1, padding:'12px', borderRadius:12, border:'1px solid rgba(255,255,255,0.1)', background:'transparent', color:'rgba(255,255,255,0.5)', fontSize:14, fontWeight:600, cursor:'pointer', fontFamily:'inherit' },
   confirm: { flex:2, padding:'12px', borderRadius:12, border:'none', background:'linear-gradient(135deg,#818cf8 0%,#c084fc 100%)', color:'#fff', fontSize:14, fontWeight:700, cursor:'pointer', fontFamily:'inherit' },
-  tmplItem: { display:'flex', alignItems:'center', gap:12, padding:'12px 14px', borderRadius:12, border:'1px solid rgba(255,255,255,0.08)', background:'rgba(255,255,255,0.04)', cursor:'pointer', width:'100%' },
-  infoSection: { color:'#818cf8', fontWeight:700, fontSize:12, letterSpacing:'0.6px', textTransform:'uppercase', marginBottom:6 },
+  tmplItem: { display:'flex', alignItems:'center', gap:12, padding:'11px 14px', borderRadius:12, border:'1px solid rgba(255,255,255,0.08)', background:'rgba(255,255,255,0.04)', cursor:'pointer', width:'100%', marginBottom:4 },
+  infoSection: { color:'#818cf8', fontWeight:700, fontSize:11, letterSpacing:'0.6px', textTransform:'uppercase', marginBottom:8, marginTop:4 },
 }
