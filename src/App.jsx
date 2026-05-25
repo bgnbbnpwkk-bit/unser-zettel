@@ -62,11 +62,14 @@ export default function App() {
   }
 
   useEffect(() => {
-    const check = () => setIsLandscape(window.innerWidth > window.innerHeight)
-    check()
-    window.addEventListener('resize', check)
-    return () => window.removeEventListener('resize', check)
-  }, [])
+  const check = () => {
+    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)
+    setIsLandscape(isMobile && window.innerWidth > window.innerHeight)
+  }
+  check()
+  window.addEventListener('resize', check)
+  return () => window.removeEventListener('resize', check)
+}, [])
 
   useEffect(() => {
     const q = query(collection(db, 'items'), orderBy('createdAt', 'desc'))
