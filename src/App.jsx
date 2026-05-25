@@ -16,8 +16,17 @@ const CATEGORIES = [
   { id: 'other',     label: 'Sonstiges',       emoji: '📦', color: '#d1d5db' },
 ]
 
+const USERS = [
+  { name: 'Marc',  color: '#818cf8' },
+  { name: 'Melli', color: '#fb7185' },
+]
+
 function getCategoryById(id) {
   return CATEGORIES.find(c => c.id === id) || CATEGORIES[7]
+}
+
+function getUserColor(name) {
+  return USERS.find(u => u.name === name)?.color || '#818cf8'
 }
 
 function toTemplateId(name) {
@@ -27,6 +36,7 @@ function toTemplateId(name) {
 }
 
 export default function App() {
+  const [user, setUser] = useState(() => localStorage.getItem('zettel-user') || '')
   const [items, setItems] = useState([])
   const [templates, setTemplates] = useState([])
   const [loading, setLoading] = useState(true)
@@ -35,17 +45,15 @@ export default function App() {
   const [newCategory, setNewCategory] = useState('other')
   const [showAdd, setShowAdd] = useState(false)
   const [showFavorites, setShowFavorites] = useState(false)
+  const [showInfo, setShowInfo] = useState(false)
   const [suggestions, setSuggestions] = useState([])
   const [isLandscape, setIsLandscape] = useState(false)
   const inputRef = useRef(null)
 
-  const [user] = useState(() => {
-    const saved = localStorage.getItem('zettel-user')
-    if (saved) return saved
-    const name = prompt('Wie heißt du?') || 'Anonym'
+  const selectUser = (name) => {
     localStorage.setItem('zettel-user', name)
-    return name
-  })
+    setUser(name)
+  }
 
   useEffect(() => {
     const check = () => setIsLandscape(window.innerWidth > window.innerHeight)
@@ -120,11 +128,32 @@ export default function App() {
     return acc
   }, {})
 
+  const avatarOrder = user === 'Marc'
+    ? [{ name: 'Marc', color: '#818cf8' }, { name: 'Melli', color: '#fb7185' }]
+    : [{ name: 'Melli', color: '#fb7185' }, { name: 'Marc', color: '#818cf8' }]
+
+  if (!user) return (
+    <div style={S.root}>
+      <div style={S.blob1} /><div style={S.blob2} />
+      <div style={S.onboarding}>
+        <div style={{ fontSize: 56, marginBottom: 16 }}>🛒</div>
+        <div style={S.onboardingTitle}>Unser Zettel</div>
+        <div style={S.onboardingSubtitle}>Wer bist du?</div>
+        <div style={{ display: 'flex', gap: 12, marginTop: 32 }}>
+          <button style={{...S.onboardingBtn, background: '#818cf8', boxShadow: '0 8px 24px rgba(129,140,248,0.4)'}} onClick={() => selectUser('Marc')}>Marc</button>
+          <button style={{...S.onboardingBtn, background: '#fb7185', boxShadow: '0 8px 24px rgba(251,113,133,0.4)'}} onClick={() => selectUser('Melli')}>Melli</button>
+        </div>
+      </div>
+    </div>
+  )
+
   if (isLandscape) return (
-    <div style={S.landscape}>
-      <div style={{ fontSize: 48 }}>📱</div>
-      <div style={{ color: '#fff', fontSize: 18, fontWeight: 700, marginTop: 16 }}>Bitte drehe dein Gerät</div>
-      <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: 14, marginTop: 8 }}>Diese App funktioniert nur im Hochformat</div>
+    <div style={S.root}>
+      <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100%' }}>
+        <div style={{ fontSize: 48 }}>📱</div>
+        <div style={{ color: '#fff', fontSize: 18, fontWeight: 700, marginTop: 16 }}>Bitte drehe dein Gerät</div>
+        <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: 14, marginTop: 8 }}>Diese App funktioniert nur im Hochformat</div>
+      </div>
     </div>
   )
 
@@ -139,12 +168,22 @@ export default function App() {
             <div style={S.subtitle}>{loading ? 'Laden…' : `${uncheckedCount} offen · ${checkedCount} erledigt`}</div>
           </div>
           <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-            <button style={S.favBtn} onClick={() => { setShowFavorites(true); setShowAdd(false) }}>
+            <button style={S.favBtn} onClick={() => { setShowInfo(true); setShowAdd(false); setShowFavorites(false) }}>ℹ️</button>
+            <button style={S.favBtn} onClick={() => { setShowFavorites(true); setShowAdd(false); setShowInfo(false) }}>
               ⭐{favorites.length > 0 && <span style={S.badge}>{favorites.length}</span>}
             </button>
             <div style={S.avatars}>
-              <div style={{...S.avatar, background:'#818cf8'}}>M</div>
-              <div style={{...S.avatar, background:'#fb7185', marginLeft:-8}}>D</div>
+              {avatarOrder.map((u, i) => (
+                <div key={u.name} style={{
+                  ...S.avatar,
+                  background: u.color,
+                  marginLeft: i > 0 ? -6 : 0,
+                  opacity: u.name === user ? 1 : 0.5,
+                  zIndex: i === 0 ? 2 : 1,
+                }}>
+                  {u.name}
+                </div>
+              ))}
             </div>
           </div>
         </div>
@@ -159,7 +198,10 @@ export default function App() {
 
         <div style={S.list}>
           {!loading && Object.keys(grouped).length === 0 && (
-            <div style={S.empty}><div style={{fontSize:40}}>🛍️</div><div style={{color:'rgba(255,255,255,0.4)',marginTop:8}}>Hier ist noch nichts</div></div>
+            <div style={S.empty}>
+              <div style={{fontSize:40}}>🛍️</div>
+              <div style={{color:'rgba(255,255,255,0.4)',marginTop:8}}>Hier ist noch nichts</div>
+            </div>
           )}
           {Object.entries(grouped).map(([catId, catItems]) => {
             const cat = getCategoryById(catId)
@@ -177,6 +219,7 @@ export default function App() {
                       onToggle={() => toggleItem(item)}
                       onRemove={() => removeItem(item.id)}
                       catColor={cat.color}
+                      addedByColor={getUserColor(item.addedBy)}
                       isFav={tmpl?.favorite || false}
                       onToggleFav={() => tmpl && toggleFavorite(tmpl)}
                     />
@@ -190,7 +233,7 @@ export default function App() {
           )}
         </div>
 
-        {!showAdd && !showFavorites && (
+        {!showAdd && !showFavorites && !showInfo && (
           <button style={S.fab} onClick={() => setShowAdd(true)}>+</button>
         )}
 
@@ -239,7 +282,7 @@ export default function App() {
               </div>
               {favorites.length === 0 ? (
                 <div style={{ color:'rgba(255,255,255,0.4)', fontSize:13, textAlign:'center', padding:'24px 0' }}>
-                  Noch keine Favoriten. Tippe ⭐ auf einem Artikel.
+                  Noch keine Favoriten. Tippe ☆ auf einem Artikel.
                 </div>
               ) : (
                 <div style={{ display:'flex', flexDirection:'column', gap:6, maxHeight:300, overflowY:'auto' }}>
@@ -262,7 +305,49 @@ export default function App() {
                 </div>
               )}
               <div style={{ marginTop:10, color:'rgba(255,255,255,0.25)', fontSize:11, textAlign:'center' }}>
-                Tippe ⭐ auf einem Artikel um ihn zu favorisieren
+                Tippe ☆ auf einem Artikel um ihn zu favorisieren
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showInfo && (
+          <div style={S.panel}>
+            <div style={S.panelInner}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+                <span style={{ color:'#fff', fontWeight:700, fontSize:16 }}>ℹ️ Über diese App</span>
+                <button style={{...S.cancel, flex:'none', padding:'6px 14px'}} onClick={() => setShowInfo(false)}>✕</button>
+              </div>
+              <div style={{ display:'flex', flexDirection:'column', gap:16, maxHeight:360, overflowY:'auto' }}>
+                <div>
+                  <div style={S.infoSection}>App</div>
+                  <div style={{ color:'#fff', fontWeight:600 }}>🛒 Unser Zettel <span style={{ color:'rgba(255,255,255,0.4)', fontWeight:400, fontSize:12 }}>v1.1.0</span></div>
+                  <div style={{ color:'rgba(255,255,255,0.5)', fontSize:12, marginTop:2 }}>Gemeinsamer Einkaufszettel für Marc & Melli</div>
+                </div>
+                <div>
+                  <div style={S.infoSection}>Features</div>
+                  {['Echtzeit-Sync zwischen Geräten','Artikel mit Kategorien','Favoriten & Verlauf','Autocomplete beim Tippen','Hochformat-Optimierung'].map(f => (
+                    <div key={f} style={{ color:'rgba(255,255,255,0.7)', fontSize:13, paddingBottom:4 }}>✓ {f}</div>
+                  ))}
+                </div>
+                <div>
+                  <div style={S.infoSection}>Changelog</div>
+                  <div style={{ color:'rgba(255,255,255,0.5)', fontSize:11, marginBottom:4 }}>v1.1.0 – 25.05.2026</div>
+                  {['Favoriten & Verlauf','Autocomplete','FAB immer sichtbar','Onboarding Screen','Avatare mit Namen','Info Screen'].map(c => (
+                    <div key={c} style={{ color:'rgba(255,255,255,0.7)', fontSize:12, paddingBottom:3 }}>+ {c}</div>
+                  ))}
+                  <div style={{ color:'rgba(255,255,255,0.5)', fontSize:11, marginTop:8, marginBottom:4 }}>v1.0.0 – 25.05.2026</div>
+                  <div style={{ color:'rgba(255,255,255,0.7)', fontSize:12 }}>+ Erstveröffentlichung</div>
+                </div>
+                <div>
+                  <div style={S.infoSection}>Tech Stack</div>
+                  {[['Frontend','React + Vite'],['Datenbank','Firebase Firestore'],['Hosting','GitHub Pages'],['CI/CD','GitHub Actions']].map(([k,v]) => (
+                    <div key={k} style={{ display:'flex', justifyContent:'space-between', paddingBottom:4 }}>
+                      <span style={{ color:'rgba(255,255,255,0.4)', fontSize:12 }}>{k}</span>
+                      <span style={{ color:'rgba(255,255,255,0.7)', fontSize:12 }}>{v}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           </div>
@@ -282,7 +367,7 @@ function Chip({ label, active, onClick, color }) {
   )
 }
 
-function ItemRow({ item, onToggle, onRemove, catColor, isFav, onToggleFav }) {
+function ItemRow({ item, onToggle, onRemove, catColor, addedByColor, isFav, onToggleFav }) {
   return (
     <div style={{...S.itemRow, opacity:item.checked?0.45:1}}>
       <button style={{...S.checkbox, borderColor:catColor}} onClick={onToggle}>
@@ -290,25 +375,30 @@ function ItemRow({ item, onToggle, onRemove, catColor, isFav, onToggleFav }) {
       </button>
       <div style={S.itemContent}>
         <span style={{...S.itemName, textDecoration:item.checked?'line-through':'none'}}>{item.name}</span>
-        <span style={S.addedBy}>{item.addedBy}</span>
+        <span style={{...S.addedBy, color: addedByColor + '99'}}>{item.addedBy}</span>
       </div>
-      <button style={{...S.iconBtn, color:isFav?'#fbbf24':'rgba(255,255,255,0.2)'}} onClick={onToggleFav}>⭐</button>
+      <button style={{...S.iconBtn, color: isFav ? '#fbbf24' : 'rgba(255,255,255,0.2)', fontSize:16}} onClick={onToggleFav}>
+        {isFav ? '★' : '☆'}
+      </button>
       <button style={S.removeBtn} onClick={onRemove}>×</button>
     </div>
   )
 }
 
 const S = {
-  root: { minHeight:'100vh', background:'linear-gradient(135deg,#0f0c1a 0%,#1a1030 50%,#0d1829 100%)', display:'flex', alignItems:'center', justifyContent:'center', fontFamily:"'Outfit',sans-serif", position:'relative', overflow:'hidden' },
+  root: { position:'fixed', inset:0, background:'linear-gradient(135deg,#0f0c1a 0%,#1a1030 50%,#0d1829 100%)', display:'flex', alignItems:'center', justifyContent:'center', fontFamily:"'Outfit',sans-serif", overflow:'hidden' },
   blob1: { position:'absolute', top:-100, right:-80, width:350, height:350, borderRadius:'50%', background:'radial-gradient(circle,rgba(129,140,248,0.15) 0%,transparent 70%)', pointerEvents:'none' },
   blob2: { position:'absolute', bottom:-80, left:-60, width:300, height:300, borderRadius:'50%', background:'radial-gradient(circle,rgba(251,113,133,0.12) 0%,transparent 70%)', pointerEvents:'none' },
-  frame: { width:'100%', maxWidth:390, height:'100dvh', background:'rgba(15,12,26,0.85)', backdropFilter:'blur(20px)', border:'1px solid rgba(255,255,255,0.08)', boxShadow:'0 30px 80px rgba(0,0,0,0.6)', display:'flex', flexDirection:'column', overflow:'hidden', position:'relative' },
-  landscape: { position:'fixed', inset:0, background:'#0f0c1a', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', fontFamily:"'Outfit',sans-serif", zIndex:999 },
+  frame: { width:'100%', maxWidth:390, height:'100%', background:'rgba(15,12,26,0.85)', backdropFilter:'blur(20px)', border:'1px solid rgba(255,255,255,0.08)', boxShadow:'0 30px 80px rgba(0,0,0,0.6)', display:'flex', flexDirection:'column', overflow:'hidden', position:'relative' },
+  onboarding: { display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100%', padding:32, textAlign:'center', position:'relative', zIndex:1 },
+  onboardingTitle: { fontSize:28, fontWeight:700, color:'#fff', letterSpacing:'-0.5px' },
+  onboardingSubtitle: { fontSize:16, color:'rgba(255,255,255,0.5)', marginTop:8 },
+  onboardingBtn: { padding:'16px 32px', borderRadius:16, border:'none', color:'#fff', fontSize:18, fontWeight:700, cursor:'pointer', fontFamily:'inherit', minWidth:120 },
   header: { padding:'24px 20px 14px', display:'flex', justifyContent:'space-between', alignItems:'flex-start', borderBottom:'1px solid rgba(255,255,255,0.06)', flexShrink:0 },
   appName: { fontSize:22, fontWeight:700, color:'#fff', letterSpacing:'-0.3px' },
   subtitle: { fontSize:12, color:'rgba(255,255,255,0.4)', marginTop:2 },
   avatars: { display:'flex', alignItems:'center' },
-  avatar: { width:30, height:30, borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center', fontSize:12, fontWeight:700, color:'#fff', border:'2px solid rgba(15,12,26,0.9)' },
+  avatar: { height:28, paddingLeft:10, paddingRight:10, borderRadius:14, display:'flex', alignItems:'center', justifyContent:'center', fontSize:11, fontWeight:700, color:'#fff', border:'2px solid rgba(15,12,26,0.9)', whiteSpace:'nowrap', transition:'opacity 0.2s' },
   favBtn: { background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.1)', borderRadius:20, padding:'5px 10px', fontSize:13, cursor:'pointer', display:'flex', alignItems:'center', gap:4, color:'#fff' },
   badge: { background:'#fbbf24', color:'#000', borderRadius:'50%', width:16, height:16, fontSize:9, fontWeight:700, display:'flex', alignItems:'center', justifyContent:'center' },
   filterRow: { display:'flex', gap:6, padding:'10px 16px', overflowX:'auto', scrollbarWidth:'none', flexShrink:0 },
@@ -324,8 +414,8 @@ const S = {
   checkbox: { width:22, height:22, borderRadius:7, border:'1.5px solid', background:'transparent', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 },
   itemContent: { flex:1, display:'flex', flexDirection:'column', gap:1, minWidth:0 },
   itemName: { fontSize:15, color:'#fff', fontWeight:500, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' },
-  addedBy: { fontSize:10, color:'rgba(255,255,255,0.3)', fontWeight:500 },
-  iconBtn: { width:26, height:26, border:'none', background:'transparent', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, fontSize:14 },
+  addedBy: { fontSize:10, fontWeight:600 },
+  iconBtn: { width:26, height:26, border:'none', background:'transparent', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, transition:'color 0.2s' },
   removeBtn: { width:22, height:22, borderRadius:'50%', border:'none', background:'rgba(255,255,255,0.06)', color:'rgba(255,255,255,0.3)', cursor:'pointer', fontSize:16, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 },
   clearBtn: { width:'100%', padding:'10px', marginTop:8, borderRadius:12, border:'1px dashed rgba(255,255,255,0.12)', background:'transparent', color:'rgba(255,255,255,0.3)', fontSize:12, fontWeight:600, cursor:'pointer' },
   fab: { position:'absolute', bottom:24, right:20, width:56, height:56, borderRadius:'50%', background:'linear-gradient(135deg,#818cf8 0%,#c084fc 100%)', border:'none', color:'#fff', fontSize:28, cursor:'pointer', boxShadow:'0 8px 24px rgba(129,140,248,0.45)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:10 },
@@ -340,4 +430,5 @@ const S = {
   cancel: { flex:1, padding:'12px', borderRadius:12, border:'1px solid rgba(255,255,255,0.1)', background:'transparent', color:'rgba(255,255,255,0.5)', fontSize:14, fontWeight:600, cursor:'pointer', fontFamily:'inherit' },
   confirm: { flex:2, padding:'12px', borderRadius:12, border:'none', background:'linear-gradient(135deg,#818cf8 0%,#c084fc 100%)', color:'#fff', fontSize:14, fontWeight:700, cursor:'pointer', fontFamily:'inherit' },
   tmplItem: { display:'flex', alignItems:'center', gap:12, padding:'12px 14px', borderRadius:12, border:'1px solid rgba(255,255,255,0.08)', background:'rgba(255,255,255,0.04)', cursor:'pointer', width:'100%' },
+  infoSection: { color:'#818cf8', fontWeight:700, fontSize:12, letterSpacing:'0.6px', textTransform:'uppercase', marginBottom:6 },
 }
