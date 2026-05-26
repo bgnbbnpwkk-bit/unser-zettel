@@ -140,13 +140,22 @@ export default function App() {
 
  const uncheckedCount = items.filter(i => !i.checked).length
  const checkedCount   = items.filter(i => i.checked).length
- const favCount       = templates.filter(t => t.favorite).length
+
+ // Nur Favoriten die aktuell auf dem Zettel sind
+ const favsOnZettel = items.filter(i => isFavorite(i.name)).length
 
  const filtered =
    activeFilter === 'all'       ? items :
    activeFilter === 'checked'   ? items.filter(i => i.checked) :
    activeFilter === 'favorites' ? items.filter(i => isFavorite(i.name)) :
    items.filter(i => i.category === activeFilter)
+
+ // Zurück zu "alle" wenn Favoriten-Filter aktiv aber keine Favoriten mehr auf dem Zettel
+ useEffect(() => {
+   if (activeFilter === 'favorites' && favsOnZettel === 0) {
+     setActiveFilter('all')
+   }
+ }, [favsOnZettel, activeFilter])
 
  const grouped = filtered.reduce((acc, item) => {
    if (!acc[item.category]) acc[item.category] = []
@@ -199,9 +208,13 @@ export default function App() {
          </div>
          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
            <button
-             style={{...S.favBtn, background: activeFilter==='favorites' ? 'rgba(251,191,36,0.2)' : 'rgba(255,255,255,0.06)', border: activeFilter==='favorites' ? '1px solid #fbbf24' : '1px solid rgba(255,255,255,0.1)'}}
-             onClick={() => { closeAll(); setActiveFilter(activeFilter === 'favorites' ? 'all' : 'favorites') }}>
-             ⭐{favCount > 0 && <span style={S.badge}>{favCount}</span>}
+             style={{...S.favBtn,
+               background: activeFilter==='favorites' ? 'rgba(251,191,36,0.2)' : 'rgba(255,255,255,0.06)',
+               border: activeFilter==='favorites' ? '1px solid #fbbf24' : '1px solid rgba(255,255,255,0.1)',
+               opacity: favsOnZettel === 0 ? 0.4 : 1,
+             }}
+             onClick={() => { closeAll(); if (favsOnZettel > 0) setActiveFilter(activeFilter === 'favorites' ? 'all' : 'favorites') }}>
+             ⭐{favsOnZettel > 0 && <span style={S.badge}>{favsOnZettel}</span>}
            </button>
            <div style={S.avatars}>
              {avatarOrder.map((u, i) => (
@@ -311,18 +324,22 @@ export default function App() {
              <div style={{ display:'flex', flexDirection:'column', gap:16, maxHeight:360, overflowY:'auto' }}>
                <div>
                  <div style={S.infoSection}>App</div>
-                 <div style={{ color:'#fff', fontWeight:600 }}>🛒 Einkaufszettel von Melli & Marc <span style={{ color:'rgba(255,255,255,0.4)', fontWeight:400, fontSize:12 }}>v1.4.0</span></div>
+                 <div style={{ color:'#fff', fontWeight:600 }}>🛒 Einkaufszettel von Melli & Marc <span style={{ color:'rgba(255,255,255,0.4)', fontWeight:400, fontSize:12 }}>v1.5.0</span></div>
                </div>
                <div>
                  <div style={S.infoSection}>Features</div>
-                 {['Echtzeit-Sync zwischen Geräten','Artikel mit Kategorien','Favoriten als Filter','Autocomplete beim Tippen','Einkauf beenden – Haken zurücksetzen','Sicherheitsabfrage beim Löschen','Onboarding Screen','Hochformat-Optimierung für Mobilgeräte'].map(f => (
+                 {['Echtzeit-Sync zwischen Geräten','Artikel mit Kategorien','Favoriten als Filter (nur aktive Artikel)','Autocomplete beim Tippen','Einkauf beenden – Haken zurücksetzen','Sicherheitsabfrage beim Löschen','Onboarding Screen','Hochformat-Optimierung für Mobilgeräte'].map(f => (
                    <div key={f} style={{ color:'rgba(255,255,255,0.7)', fontSize:13, paddingBottom:4 }}>✓ {f}</div>
                  ))}
                </div>
                <div>
                  <div style={S.infoSection}>Changelog</div>
-                 <div style={{ color:'rgba(255,255,255,0.5)', fontSize:11, marginBottom:4 }}>v1.4.0 – 25.05.2026</div>
-                 {['Einkauf beenden statt Erledigte löschen','Sicherheitsabfrage beim Artikel löschen','ℹ️ dezenter und ganz rechts','Landscape-Fix für Desktop'].map(c => (
+                 <div style={{ color:'rgba(255,255,255,0.5)', fontSize:11, marginBottom:4 }}>v1.5.0 – 25.05.2026</div>
+                 {['Favoriten-Badge zeigt nur aktive Artikel','Favoriten-Filter deaktiviert wenn keine auf dem Zettel','Filter springt automatisch zurück auf Alle'].map(c => (
+                   <div key={c} style={{ color:'rgba(255,255,255,0.7)', fontSize:12, paddingBottom:3 }}>+ {c}</div>
+                 ))}
+                 <div style={{ color:'rgba(255,255,255,0.5)', fontSize:11, marginTop:8, marginBottom:4 }}>v1.4.0 – 25.05.2026</div>
+                 {['Einkauf beenden','Sicherheitsabfrage beim Löschen','ℹ️ dezenter','Landscape-Fix Desktop'].map(c => (
                    <div key={c} style={{ color:'rgba(255,255,255,0.7)', fontSize:12, paddingBottom:3 }}>+ {c}</div>
                  ))}
                  <div style={{ color:'rgba(255,255,255,0.5)', fontSize:11, marginTop:8, marginBottom:4 }}>v1.3.0 – 25.05.2026</div>
