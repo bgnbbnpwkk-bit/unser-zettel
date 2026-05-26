@@ -4,6 +4,17 @@ import {
   serverTimestamp, query, orderBy, setDoc, increment
 } from 'firebase/firestore'
 import { db } from './firebase.js'
+import {
+  DndContext, closestCenter,
+  PointerSensor, TouchSensor,
+  useSensor, useSensors,
+  DragOverlay
+} from '@dnd-kit/core'
+import {
+  SortableContext, verticalListSortingStrategy,
+  useSortable, arrayMove
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 
 const CATEGORIES = [
   { id: 'fruit',     label: 'Obst & Gemüse',  emoji: '🥦', color: '#4ade80' },
@@ -15,6 +26,7 @@ const CATEGORIES = [
   { id: 'household', label: 'Haushalt',        emoji: '🧹', color: '#fb923c' },
   { id: 'other',     label: 'Sonstiges',       emoji: '📦', color: '#d1d5db' },
 ]
+const DEFAULT_CAT_ORDER = CATEGORIES.map(c => c.id)
 
 function getCategoryById(id) {
   return CATEGORIES.find(c => c.id === id) || CATEGORIES[7]
@@ -26,6 +38,74 @@ function toTemplateId(name) {
     .replace(/[^a-z0-9]/g,'-').replace(/-+/g,'-').replace(/^-|-$/g,'')
 }
 
+function getSortedItems(list) {
+  return [...list].sort((a, b) => {
+    if (a.order != null && b.order != null) return a.order - b.order
+    if (a.order != null) return -1
+    if (b.order != null) return 1
+    const at = a.createdAt?.toMillis?.() ?? 0
+    const bt = b.createdAt?.toMillis?.() ?? 0
+    return at - bt
+  })
+}
+
+// ── SortableCatGroup ──────────────────────────────────────────────────────────
+function SortableCatGroup({ catId, cat, catItems, getToBuy, getChecked,
+  toggleToBuy, toggleChecked, removeItem }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id: `cat-${catId}` })
+
+  return (
+    <div ref={setNodeRef} style={{
+      ...S.catGroup,
+      transform: CSS.Transform.toString(transform),
+      transition,
+      opacity: isDragging ? 0.4 : 1,
+    }}>
+      <div style={S.catHeader}>
+        <span style={S.dragHandle} {...attributes} {...listeners}>⠿</span>
+        <span style={{...S.catDot, background: cat.color}} />
+        <span style={S.catLabel}>{cat.emoji} {cat.label}</span>
+        <span style={S.catCount}>{catItems.length}</span>
+      </div>
+      <SortableContext
+        items={catItems.map(i => `item-${i.id}`)}
+        strategy={verticalListSortingStrategy}
+      >
+        {catItems.map(item => (
+          <SortableItem
+            key={item.id}
+            item={item}
+            toBuy={getToBuy(item)}
+            checked={getChecked(item)}
+            onToggleToBuy={() => toggleToBuy(item)}
+            onToggleChecked={() => toggleChecked(item)}
+            onRemove={() => removeItem(item.id)}
+            catColor={cat.color}
+          />
+        ))}
+      </SortableContext>
+    </div>
+  )
+}
+
+// ── SortableItem ──────────────────────────────────────────────────────────────
+function SortableItem({ item, ...props }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id: `item-${item.id}` })
+
+  return (
+    <div ref={setNodeRef} style={{
+      transform: CSS.Transform.toString(transform),
+      transition,
+      opacity: isDragging ? 0.4 : 1,
+    }}>
+      <ItemRow item={item} dragHandleProps={{ ...attributes, ...listeners }} {...props} />
+    </div>
+  )
+}
+
+// ── App ───────────────────────────────────────────────────────────────────────
 export default function App() {
   const [user, setUser] = useState(() => {
     const saved = localStorage.getItem('zettel-user')
@@ -35,6 +115,7 @@ export default function App() {
   })
   const [items, setItems] = useState([])
   const [templates, setTemplates] = useState([])
+  const [catOrder, setCatOrder] = useState(DEFAULT_CAT_ORDER)
   const [loading, setLoading] = useState(true)
   const [activeFilter, setActiveFilter] = useState('all')
   const [newItem, setNewItem] = useState('')
@@ -43,14 +124,19 @@ export default function App() {
   const [showInfo, setShowInfo] = useState(false)
   const [suggestions, setSuggestions] = useState([])
   const [isLandscape, setIsLandscape] = useState(false)
+  const [activeDragId, setActiveDragId] = useState(null)
   const inputRef = useRef(null)
 
   const closeAll = () => { setShowAdd(false); setShowInfo(false); setSuggestions([]) }
   const selectUser = (name) => { localStorage.setItem('zettel-user', name); setUser(name) }
 
-  // Per-user field helpers
   const getToBuy   = item => item[`toBuy_${user}`]   || false
   const getChecked = item => item[`checked_${user}`] || false
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(TouchSensor,   { activationConstraint: { delay: 250, tolerance: 8 } })
+  )
 
   useEffect(() => {
     const check = () => {
@@ -60,6 +146,20 @@ export default function App() {
     check()
     window.addEventListener('resize', check)
     return () => window.removeEventListener('resize', check)
+  }, [])
+
+  // Kategorie-Reihenfolge aus Firestore
+  useEffect(() => {
+    return onSnapshot(doc(db, 'settings', 'categoryOrder'), snap => {
+      if (snap.exists()) {
+        const saved = snap.data().order
+        const merged = [
+          ...saved.filter(id => DEFAULT_CAT_ORDER.includes(id)),
+          ...DEFAULT_CAT_ORDER.filter(id => !saved.includes(id)),
+        ]
+        setCatOrder(merged)
+      }
+    })
   }, [])
 
   useEffect(() => {
@@ -100,8 +200,11 @@ export default function App() {
     const n = (name || newItem).trim()
     const c = category || newCategory
     if (!n) return
+    const catItems = items.filter(i => i.category === c)
+    const maxOrder = catItems.reduce((max, i) => Math.max(max, i.order ?? -1), -1)
     await addDoc(collection(db, 'items'), {
       name: n, category: c, createdAt: serverTimestamp(),
+      order: maxOrder + 1,
       toBuy_Marc: false, checked_Marc: false,
       toBuy_Melli: false, checked_Melli: false,
     })
@@ -136,6 +239,40 @@ export default function App() {
       })
     ))
 
+  const handleDragEnd = async ({ active, over }) => {
+    setActiveDragId(null)
+    if (!over || active.id === over.id) return
+    const aId = String(active.id)
+    const oId = String(over.id)
+
+    if (aId.startsWith('cat-') && oId.startsWith('cat-')) {
+      const aCatId = aId.slice(4)
+      const oCatId = oId.slice(4)
+      const ai = catOrder.indexOf(aCatId)
+      const oi = catOrder.indexOf(oCatId)
+      if (ai < 0 || oi < 0) return
+      const newOrder = arrayMove(catOrder, ai, oi)
+      setCatOrder(newOrder)
+      await setDoc(doc(db, 'settings', 'categoryOrder'), { order: newOrder })
+      return
+    }
+
+    if (aId.startsWith('item-') && oId.startsWith('item-')) {
+      const aItemId = aId.slice(5)
+      const oItemId = oId.slice(5)
+      const aItem = items.find(i => i.id === aItemId)
+      const oItem = items.find(i => i.id === oItemId)
+      if (!aItem || !oItem || aItem.category !== oItem.category) return
+      const catItems = getSortedItems(items.filter(i => i.category === aItem.category))
+      const ai = catItems.findIndex(i => i.id === aItemId)
+      const oi = catItems.findIndex(i => i.id === oItemId)
+      const reordered = arrayMove(catItems, ai, oi)
+      await Promise.all(reordered.map((item, idx) =>
+        updateDoc(doc(db, 'items', item.id), { order: idx })
+      ))
+    }
+  }
+
   const toBuyCount   = items.filter(i => getToBuy(i)).length
   const checkedCount = items.filter(i => getChecked(i)).length
 
@@ -151,13 +288,18 @@ export default function App() {
     return acc
   }, {})
 
-  const orderedGroups = CATEGORIES
-    .filter(cat => grouped[cat.id])
-    .map(cat => [cat.id, grouped[cat.id]])
+  const orderedGroups = catOrder
+    .filter(catId => grouped[catId])
+    .map(catId => [catId, getSortedItems(grouped[catId])])
 
   const avatarOrder = user === 'Marc'
     ? [{ name: 'Marc', color: '#818cf8' }, { name: 'Melli', color: '#fb7185' }]
     : [{ name: 'Melli', color: '#fb7185' }, { name: 'Marc', color: '#818cf8' }]
+
+  const activeDragItem = activeDragId?.startsWith('item-')
+    ? items.find(i => i.id === activeDragId.slice(5)) : null
+  const activeDragCat = activeDragId?.startsWith('cat-')
+    ? getCategoryById(activeDragId.slice(4)) : null
 
   if (!user) return (
     <div style={S.root}>
@@ -230,29 +372,53 @@ export default function App() {
               </div>
             </div>
           )}
-          {orderedGroups.map(([catId, catItems]) => {
-            const cat = getCategoryById(catId)
-            return (
-              <div key={catId} style={S.catGroup}>
-                <div style={S.catHeader}>
-                  <span style={{...S.catDot, background:cat.color}} />
-                  <span style={S.catLabel}>{cat.emoji} {cat.label}</span>
-                  <span style={S.catCount}>{catItems.length}</span>
-                </div>
-                {catItems.map(item => (
-                  <ItemRow key={item.id} item={item}
-                    toBuy={getToBuy(item)}
-                    checked={getChecked(item)}
-                    onToggleToBuy={() => toggleToBuy(item)}
-                    onToggleChecked={() => toggleChecked(item)}
-                    onRemove={() => removeItem(item.id)}
-                    catColor={cat.color}
-                    itemName={item.name}
+
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragStart={({ active }) => setActiveDragId(String(active.id))}
+            onDragEnd={handleDragEnd}
+            onDragCancel={() => setActiveDragId(null)}
+          >
+            <SortableContext
+              items={orderedGroups.map(([catId]) => `cat-${catId}`)}
+              strategy={verticalListSortingStrategy}
+            >
+              {orderedGroups.map(([catId, catItems]) => {
+                const cat = getCategoryById(catId)
+                return (
+                  <SortableCatGroup
+                    key={catId}
+                    catId={catId}
+                    cat={cat}
+                    catItems={catItems}
+                    getToBuy={getToBuy}
+                    getChecked={getChecked}
+                    toggleToBuy={toggleToBuy}
+                    toggleChecked={toggleChecked}
+                    removeItem={removeItem}
                   />
-                ))}
-              </div>
-            )
-          })}
+                )
+              })}
+            </SortableContext>
+
+            <DragOverlay>
+              {activeDragCat && (
+                <div style={S.dragOverlayCat}>
+                  <span style={S.dragHandle}>⠿</span>
+                  <span style={{...S.catDot, background: activeDragCat.color}} />
+                  <span style={S.catLabel}>{activeDragCat.emoji} {activeDragCat.label}</span>
+                </div>
+              )}
+              {activeDragItem && (
+                <div style={{...S.itemRow, opacity:1, boxShadow:'0 8px 24px rgba(0,0,0,0.5)', border:'1px solid rgba(255,255,255,0.15)'}}>
+                  <span style={S.dragHandle}>⠿</span>
+                  <span style={{ fontSize:15, color:'#fff', fontWeight:500 }}>{activeDragItem.name}</span>
+                </div>
+              )}
+            </DragOverlay>
+          </DndContext>
+
           {checkedCount > 0 && (
             <button style={S.finishBtn} onClick={finishShopping}>
               🛒 Einkauf beenden · {checkedCount} im Korb
@@ -310,7 +476,7 @@ export default function App() {
               <div style={{ display:'flex', flexDirection:'column', gap:16, maxHeight:360, overflowY:'auto' }}>
                 <div>
                   <div style={S.infoSection}>App</div>
-                  <div style={{ color:'#fff', fontWeight:600 }}>🛒 Einkaufszettel von Melli & Marc <span style={{ color:'rgba(255,255,255,0.4)', fontWeight:400, fontSize:12 }}>v1.7.0</span></div>
+                  <div style={{ color:'#fff', fontWeight:600 }}>🛒 Einkaufszettel von Melli & Marc <span style={{ color:'rgba(255,255,255,0.4)', fontWeight:400, fontSize:12 }}>v1.8.0</span></div>
                 </div>
                 <div>
                   <div style={S.infoSection}>Flow</div>
@@ -326,7 +492,9 @@ export default function App() {
                     'Gemeinsame Artikelliste für Melli & Marc',
                     'Getrennte Einkaufsstände pro Person',
                     'Echtzeit-Sync zwischen Geräten',
-                    'Artikel mit Kategorien in fester Reihenfolge',
+                    'Kategorien per ⠿ Drag & Drop sortierbar',
+                    'Artikel per ⠿ Drag & Drop sortierbar',
+                    'Reihenfolge wird in Firestore gespeichert',
                     'Heute-kaufen Selektion per 🛒',
                     'Checkbox nur für selektierte Artikel',
                     'Autocomplete beim Tippen',
@@ -339,25 +507,22 @@ export default function App() {
                 </div>
                 <div>
                   <div style={S.infoSection}>Changelog</div>
-                  <div style={{ color:'rgba(255,255,255,0.5)', fontSize:11, marginBottom:4 }}>v1.7.0 – 26.05.2026</div>
-                  {[
-                    'Getrennte Einkaufsstände pro Person',
-                    'addedBy entfernt',
-                    'toBuy & checked jetzt pro User',
-                    'Einkauf beenden setzt nur eigenen Stand zurück',
-                  ].map(c => (
+                  <div style={{ color:'rgba(255,255,255,0.5)', fontSize:11, marginBottom:4 }}>v1.8.0 – 26.05.2026</div>
+                  {['Drag & Drop für Kategorien (⠿ Handle)','Drag & Drop für Artikel (⠿ Handle)','Reihenfolge persistent in Firestore','Neue Artikel kommen ans Ende der Kategorie'].map(c => (
+                    <div key={c} style={{ color:'rgba(255,255,255,0.7)', fontSize:12, paddingBottom:3 }}>+ {c}</div>
+                  ))}
+                  <div style={{ color:'rgba(255,255,255,0.5)', fontSize:11, marginTop:8, marginBottom:4 }}>v1.7.0 – 26.05.2026</div>
+                  {['Getrennte Einkaufsstände pro Person','toBuy & checked jetzt pro User'].map(c => (
                     <div key={c} style={{ color:'rgba(255,255,255,0.7)', fontSize:12, paddingBottom:3 }}>+ {c}</div>
                   ))}
                   <div style={{ color:'rgba(255,255,255,0.5)', fontSize:11, marginTop:8, marginBottom:4 }}>v1.6.0 – 26.05.2026</div>
                   {['Neuer Einkaufs-Flow','🛒 Selektion','Kategorien in fester Reihenfolge'].map(c => (
                     <div key={c} style={{ color:'rgba(255,255,255,0.7)', fontSize:12, paddingBottom:3 }}>+ {c}</div>
                   ))}
-                  <div style={{ color:'rgba(255,255,255,0.5)', fontSize:11, marginTop:8, marginBottom:4 }}>v1.0.0 – 25.05.2026</div>
-                  <div style={{ color:'rgba(255,255,255,0.7)', fontSize:12 }}>+ Erstveröffentlichung</div>
                 </div>
                 <div>
                   <div style={S.infoSection}>Tech Stack</div>
-                  {[['Frontend','React + Vite'],['Datenbank','Firebase Firestore'],['Hosting','GitHub Pages'],['CI/CD','GitHub Actions']].map(([k,v]) => (
+                  {[['Frontend','React + Vite'],['Drag & Drop','@dnd-kit'],['Datenbank','Firebase Firestore'],['Hosting','GitHub Pages'],['CI/CD','GitHub Actions']].map(([k,v]) => (
                     <div key={k} style={{ display:'flex', justifyContent:'space-between', paddingBottom:4 }}>
                       <span style={{ color:'rgba(255,255,255,0.4)', fontSize:12 }}>{k}</span>
                       <span style={{ color:'rgba(255,255,255,0.7)', fontSize:12 }}>{v}</span>
@@ -383,9 +548,10 @@ function Chip({ label, active, onClick, color }) {
   )
 }
 
-function ItemRow({ item, toBuy, checked, onToggleToBuy, onToggleChecked, onRemove, catColor, itemName }) {
+function ItemRow({ item, toBuy, checked, onToggleToBuy, onToggleChecked, onRemove, catColor, dragHandleProps }) {
   return (
     <div style={{...S.itemRow, opacity: toBuy ? 1 : 0.5}}>
+      <span style={S.dragHandle} {...dragHandleProps}>⠿</span>
       <button style={{...S.cartBtn, color: toBuy ? '#a78bfa' : 'rgba(255,255,255,0.25)'}} onClick={onToggleToBuy}>
         🛒
       </button>
@@ -398,7 +564,7 @@ function ItemRow({ item, toBuy, checked, onToggleToBuy, onToggleChecked, onRemov
         </button>
       )}
       <button style={S.removeBtn} onClick={() => {
-        if (window.confirm(`"${itemName}" wirklich löschen?`)) onRemove()
+        if (window.confirm(`"${item.name}" wirklich löschen?`)) onRemove()
       }}>×</button>
     </div>
   )
@@ -425,9 +591,10 @@ const S = {
   empty: { display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', paddingTop:80 },
   catGroup: { marginBottom:20 },
   catHeader: { display:'flex', alignItems:'center', gap:6, marginBottom:8, paddingLeft:2 },
-  catDot: { width:6, height:6, borderRadius:'50%' },
+  catDot: { width:6, height:6, borderRadius:'50%', flexShrink:0 },
   catLabel: { fontSize:11, fontWeight:600, color:'rgba(255,255,255,0.4)', letterSpacing:'0.6px', textTransform:'uppercase', flex:1 },
   catCount: { fontSize:11, color:'rgba(255,255,255,0.25)', fontWeight:600 },
+  dragHandle: { display:'inline-flex', alignItems:'center', justifyContent:'center', width:20, height:20, color:'rgba(255,255,255,0.2)', cursor:'grab', fontSize:14, flexShrink:0, touchAction:'none', userSelect:'none' },
   itemRow: { display:'flex', alignItems:'center', gap:8, padding:'10px 12px', borderRadius:12, marginBottom:4, border:'1px solid rgba(255,255,255,0.05)', background:'rgba(255,255,255,0.04)', transition:'opacity 0.2s' },
   cartBtn: { width:28, height:28, border:'none', background:'transparent', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, fontSize:16, transition:'color 0.2s', padding:0 },
   itemContent: { flex:1, display:'flex', flexDirection:'column', gap:1, minWidth:0 },
@@ -447,4 +614,5 @@ const S = {
   cancel: { flex:1, padding:'12px', borderRadius:12, border:'1px solid rgba(255,255,255,0.1)', background:'transparent', color:'rgba(255,255,255,0.5)', fontSize:14, fontWeight:600, cursor:'pointer', fontFamily:'inherit' },
   confirm: { flex:2, padding:'12px', borderRadius:12, border:'none', background:'linear-gradient(135deg,#818cf8 0%,#c084fc 100%)', color:'#fff', fontSize:14, fontWeight:700, cursor:'pointer', fontFamily:'inherit' },
   infoSection: { color:'#818cf8', fontWeight:700, fontSize:11, letterSpacing:'0.6px', textTransform:'uppercase', marginBottom:8, marginTop:4 },
+  dragOverlayCat: { display:'flex', alignItems:'center', gap:6, padding:'8px 12px', borderRadius:10, background:'rgba(30,24,50,0.95)', border:'1px solid rgba(255,255,255,0.15)', backdropFilter:'blur(10px)', boxShadow:'0 8px 24px rgba(0,0,0,0.4)' },
 }
