@@ -16,17 +16,8 @@ const CATEGORIES = [
   { id: 'other',     label: 'Sonstiges',       emoji: '📦', color: '#d1d5db' },
 ]
 
-const USERS = [
-  { name: 'Marc',  color: '#818cf8' },
-  { name: 'Melli', color: '#fb7185' },
-]
-
 function getCategoryById(id) {
   return CATEGORIES.find(c => c.id === id) || CATEGORIES[7]
-}
-
-function getUserColor(name) {
-  return USERS.find(u => u.name === name)?.color || '#818cf8'
 }
 
 function toTemplateId(name) {
@@ -55,11 +46,11 @@ export default function App() {
   const inputRef = useRef(null)
 
   const closeAll = () => { setShowAdd(false); setShowInfo(false); setSuggestions([]) }
+  const selectUser = (name) => { localStorage.setItem('zettel-user', name); setUser(name) }
 
-  const selectUser = (name) => {
-    localStorage.setItem('zettel-user', name)
-    setUser(name)
-  }
+  // Per-user field helpers
+  const getToBuy   = item => item[`toBuy_${user}`]   || false
+  const getChecked = item => item[`checked_${user}`] || false
 
   useEffect(() => {
     const check = () => {
@@ -110,8 +101,9 @@ export default function App() {
     const c = category || newCategory
     if (!n) return
     await addDoc(collection(db, 'items'), {
-      name: n, category: c, checked: false, toBuy: false,
-      addedBy: user, createdAt: serverTimestamp()
+      name: n, category: c, createdAt: serverTimestamp(),
+      toBuy_Marc: false, checked_Marc: false,
+      toBuy_Melli: false, checked_Melli: false,
     })
     await upsertTemplate(n, c)
     setNewItem('')
@@ -119,31 +111,40 @@ export default function App() {
     setShowAdd(false)
   }
 
-  const toggleItem = async item => {
-    if (!item.toBuy) return
-    updateDoc(doc(db, 'items', item.id), { checked: !item.checked })
+  const toggleToBuy = async item => {
+    const current = getToBuy(item)
+    await updateDoc(doc(db, 'items', item.id), {
+      [`toBuy_${user}`]: !current,
+      [`checked_${user}`]: false,
+    })
   }
 
-  const toggleToBuy = async item =>
-    updateDoc(doc(db, 'items', item.id), { toBuy: !item.toBuy, checked: false })
+  const toggleChecked = async item => {
+    if (!getToBuy(item)) return
+    await updateDoc(doc(db, 'items', item.id), {
+      [`checked_${user}`]: !getChecked(item)
+    })
+  }
 
   const removeItem = async id => deleteDoc(doc(db, 'items', id))
 
   const finishShopping = async () =>
-    Promise.all(items.filter(i => i.toBuy).map(i =>
-      updateDoc(doc(db, 'items', i.id), { checked: false, toBuy: false })
+    Promise.all(items.filter(i => getToBuy(i)).map(i =>
+      updateDoc(doc(db, 'items', i.id), {
+        [`toBuy_${user}`]: false,
+        [`checked_${user}`]: false,
+      })
     ))
 
-  const toBuyCount   = items.filter(i => i.toBuy).length
-  const checkedCount = items.filter(i => i.checked).length
+  const toBuyCount   = items.filter(i => getToBuy(i)).length
+  const checkedCount = items.filter(i => getChecked(i)).length
 
   const filtered =
     activeFilter === 'all'     ? items :
-    activeFilter === 'checked' ? items.filter(i => i.checked) :
-    activeFilter === 'today'   ? items.filter(i => i.toBuy) :
+    activeFilter === 'today'   ? items.filter(i => getToBuy(i)) :
+    activeFilter === 'checked' ? items.filter(i => getChecked(i)) :
     items.filter(i => i.category === activeFilter)
 
-  // Kategorien immer in fester Reihenfolge
   const grouped = filtered.reduce((acc, item) => {
     if (!acc[item.category]) acc[item.category] = []
     acc[item.category].push(item)
@@ -162,11 +163,11 @@ export default function App() {
     <div style={S.root}>
       <div style={S.blob1} /><div style={S.blob2} />
       <div style={S.onboarding}>
-        <div style={{ fontSize: 56, marginBottom: 16 }}>🛒</div>
+        <div style={{ fontSize:56, marginBottom:16 }}>🛒</div>
         <div style={S.onboardingTitle}>Einkaufszettel</div>
         <div style={S.onboardingSubtitle}>von Melli & Marc</div>
         <div style={{ color:'rgba(255,255,255,0.4)', fontSize:14, marginTop:24, marginBottom:8 }}>Wer bist du?</div>
-        <div style={{ display: 'flex', gap: 12 }}>
+        <div style={{ display:'flex', gap:12 }}>
           <button style={{...S.onboardingBtn, background:'#818cf8', boxShadow:'0 8px 24px rgba(129,140,248,0.4)'}} onClick={() => selectUser('Marc')}>Marc</button>
           <button style={{...S.onboardingBtn, background:'#fb7185', boxShadow:'0 8px 24px rgba(251,113,133,0.4)'}} onClick={() => selectUser('Melli')}>Melli</button>
         </div>
@@ -177,7 +178,7 @@ export default function App() {
   if (isLandscape) return (
     <div style={S.root}>
       <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100%' }}>
-        <div style={{ fontSize: 48 }}>📱</div>
+        <div style={{ fontSize:48 }}>📱</div>
         <div style={{ color:'#fff', fontSize:18, fontWeight:700, marginTop:16 }}>Bitte drehe dein Gerät</div>
         <div style={{ color:'rgba(255,255,255,0.5)', fontSize:14, marginTop:8 }}>Diese App funktioniert nur im Hochformat</div>
       </div>
@@ -194,7 +195,9 @@ export default function App() {
             <div style={S.appName}>🛒 Einkaufszettel</div>
             <div style={S.subtitle}>
               von Melli & Marc
-              {!loading && toBuyCount > 0 && <span style={{ color:'rgba(255,255,255,0.3)' }}> · {toBuyCount - checkedCount} offen · {checkedCount} im Korb</span>}
+              {!loading && toBuyCount > 0 && (
+                <span style={{ color:'rgba(255,255,255,0.3)' }}> · {toBuyCount - checkedCount} offen · {checkedCount} im Korb</span>
+              )}
             </div>
           </div>
           <div style={{ display:'flex', alignItems:'center', gap:8 }}>
@@ -238,11 +241,12 @@ export default function App() {
                 </div>
                 {catItems.map(item => (
                   <ItemRow key={item.id} item={item}
-                    onToggle={() => toggleItem(item)}
+                    toBuy={getToBuy(item)}
+                    checked={getChecked(item)}
                     onToggleToBuy={() => toggleToBuy(item)}
+                    onToggleChecked={() => toggleChecked(item)}
                     onRemove={() => removeItem(item.id)}
                     catColor={cat.color}
-                    addedByColor={getUserColor(item.addedBy)}
                     itemName={item.name}
                   />
                 ))}
@@ -306,34 +310,46 @@ export default function App() {
               <div style={{ display:'flex', flexDirection:'column', gap:16, maxHeight:360, overflowY:'auto' }}>
                 <div>
                   <div style={S.infoSection}>App</div>
-                  <div style={{ color:'#fff', fontWeight:600 }}>🛒 Einkaufszettel von Melli & Marc <span style={{ color:'rgba(255,255,255,0.4)', fontWeight:400, fontSize:12 }}>v1.6.0</span></div>
+                  <div style={{ color:'#fff', fontWeight:600 }}>🛒 Einkaufszettel von Melli & Marc <span style={{ color:'rgba(255,255,255,0.4)', fontWeight:400, fontSize:12 }}>v1.7.0</span></div>
                 </div>
                 <div>
                   <div style={S.infoSection}>Flow</div>
-                  <div style={{ color:'rgba(255,255,255,0.7)', fontSize:13, lineHeight:1.7 }}>
+                  <div style={{ color:'rgba(255,255,255,0.7)', fontSize:13, lineHeight:1.8 }}>
                     1. 🛒 antippen = „will ich heute kaufen"{'\n'}
                     2. ☐ abhaken = „ist im Korb"{'\n'}
-                    3. „Einkauf beenden" = alles zurücksetzen
+                    3. „Einkauf beenden" = eigenen Stand zurücksetzen
                   </div>
                 </div>
                 <div>
                   <div style={S.infoSection}>Features</div>
-                  {['Echtzeit-Sync zwischen Geräten','Artikel mit Kategorien in fester Reihenfolge','Heute-kaufen Selektion per 🛒','Checkbox nur für selektierte Artikel','Autocomplete beim Tippen','Einkauf beenden – alles zurücksetzen','Sicherheitsabfrage beim Löschen','Hochformat-Optimierung für Mobilgeräte'].map(f => (
+                  {[
+                    'Gemeinsame Artikelliste für Melli & Marc',
+                    'Getrennte Einkaufsstände pro Person',
+                    'Echtzeit-Sync zwischen Geräten',
+                    'Artikel mit Kategorien in fester Reihenfolge',
+                    'Heute-kaufen Selektion per 🛒',
+                    'Checkbox nur für selektierte Artikel',
+                    'Autocomplete beim Tippen',
+                    'Einkauf beenden – eigenen Stand zurücksetzen',
+                    'Sicherheitsabfrage beim Löschen',
+                    'Hochformat-Optimierung für Mobilgeräte',
+                  ].map(f => (
                     <div key={f} style={{ color:'rgba(255,255,255,0.7)', fontSize:13, paddingBottom:4 }}>✓ {f}</div>
                   ))}
                 </div>
                 <div>
                   <div style={S.infoSection}>Changelog</div>
-                  <div style={{ color:'rgba(255,255,255,0.5)', fontSize:11, marginBottom:4 }}>v1.6.0 – 26.05.2026</div>
-                  {['Neuer Einkaufs-Flow mit 🛒 Selektion','Checkbox nur bei selektierten Artikeln','Favoriten entfernt','Kategorien in fester Reihenfolge','Neue Artikel ans Ende der Kategorie'].map(c => (
+                  <div style={{ color:'rgba(255,255,255,0.5)', fontSize:11, marginBottom:4 }}>v1.7.0 – 26.05.2026</div>
+                  {[
+                    'Getrennte Einkaufsstände pro Person',
+                    'addedBy entfernt',
+                    'toBuy & checked jetzt pro User',
+                    'Einkauf beenden setzt nur eigenen Stand zurück',
+                  ].map(c => (
                     <div key={c} style={{ color:'rgba(255,255,255,0.7)', fontSize:12, paddingBottom:3 }}>+ {c}</div>
                   ))}
-                  <div style={{ color:'rgba(255,255,255,0.5)', fontSize:11, marginTop:8, marginBottom:4 }}>v1.5.0 – 25.05.2026</div>
-                  {['Favoriten-Badge Fix','Filter-Reset bei leeren Favoriten'].map(c => (
-                    <div key={c} style={{ color:'rgba(255,255,255,0.7)', fontSize:12, paddingBottom:3 }}>+ {c}</div>
-                  ))}
-                  <div style={{ color:'rgba(255,255,255,0.5)', fontSize:11, marginTop:8, marginBottom:4 }}>v1.4.0 – 25.05.2026</div>
-                  {['Einkauf beenden','Sicherheitsabfrage','ℹ️ dezenter','Landscape-Fix'].map(c => (
+                  <div style={{ color:'rgba(255,255,255,0.5)', fontSize:11, marginTop:8, marginBottom:4 }}>v1.6.0 – 26.05.2026</div>
+                  {['Neuer Einkaufs-Flow','🛒 Selektion','Kategorien in fester Reihenfolge'].map(c => (
                     <div key={c} style={{ color:'rgba(255,255,255,0.7)', fontSize:12, paddingBottom:3 }}>+ {c}</div>
                   ))}
                   <div style={{ color:'rgba(255,255,255,0.5)', fontSize:11, marginTop:8, marginBottom:4 }}>v1.0.0 – 25.05.2026</div>
@@ -367,19 +383,18 @@ function Chip({ label, active, onClick, color }) {
   )
 }
 
-function ItemRow({ item, onToggle, onToggleToBuy, onRemove, catColor, addedByColor, itemName }) {
+function ItemRow({ item, toBuy, checked, onToggleToBuy, onToggleChecked, onRemove, catColor, itemName }) {
   return (
-    <div style={{...S.itemRow, opacity: item.toBuy ? 1 : 0.5}}>
-      <button style={{...S.cartBtn, color: item.toBuy ? '#a78bfa' : 'rgba(255,255,255,0.25)'}} onClick={onToggleToBuy}>
+    <div style={{...S.itemRow, opacity: toBuy ? 1 : 0.5}}>
+      <button style={{...S.cartBtn, color: toBuy ? '#a78bfa' : 'rgba(255,255,255,0.25)'}} onClick={onToggleToBuy}>
         🛒
       </button>
       <div style={S.itemContent}>
-        <span style={{...S.itemName, textDecoration: item.checked ? 'line-through' : 'none'}}>{item.name}</span>
-        <span style={{...S.addedBy, color: addedByColor + '99'}}>{item.addedBy}</span>
+        <span style={{...S.itemName, textDecoration: checked ? 'line-through' : 'none'}}>{item.name}</span>
       </div>
-      {item.toBuy && (
-        <button style={{...S.checkbox, borderColor: catColor}} onClick={onToggle}>
-          {item.checked && <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6L5 9L10 3" stroke={catColor} strokeWidth="2" strokeLinecap="round"/></svg>}
+      {toBuy && (
+        <button style={{...S.checkbox, borderColor: catColor}} onClick={onToggleChecked}>
+          {checked && <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6L5 9L10 3" stroke={catColor} strokeWidth="2" strokeLinecap="round"/></svg>}
         </button>
       )}
       <button style={S.removeBtn} onClick={() => {
@@ -417,7 +432,6 @@ const S = {
   cartBtn: { width:28, height:28, border:'none', background:'transparent', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, fontSize:16, transition:'color 0.2s', padding:0 },
   itemContent: { flex:1, display:'flex', flexDirection:'column', gap:1, minWidth:0 },
   itemName: { fontSize:15, color:'#fff', fontWeight:500, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' },
-  addedBy: { fontSize:10, fontWeight:600 },
   checkbox: { width:22, height:22, borderRadius:7, border:'1.5px solid', background:'transparent', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 },
   removeBtn: { width:22, height:22, borderRadius:'50%', border:'none', background:'rgba(255,255,255,0.06)', color:'rgba(255,255,255,0.3)', cursor:'pointer', fontSize:16, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 },
   finishBtn: { width:'100%', padding:'14px', marginTop:12, borderRadius:16, border:'none', background:'linear-gradient(135deg,#818cf8 0%,#c084fc 100%)', color:'#fff', fontSize:14, fontWeight:700, cursor:'pointer', boxShadow:'0 4px 16px rgba(129,140,248,0.35)' },
