@@ -345,7 +345,20 @@ export default function App() {
           <div style={{ display:'flex', alignItems:'center', gap:8 }}>
             <div style={S.avatars}>
               {avatarOrder.map((u, i) => (
-                <div key={u.name} style={{...S.avatar, background:u.color, marginLeft:i>0?-6:0, opacity:u.name===user?1:0.5, zIndex:i===0?2:1}}>
+                <div key={u.name}
+                  style={{
+                    ...S.avatar,
+                    background: u.color,
+                    marginLeft: i > 0 ? -6 : 0,
+                    opacity: u.name === user ? 1 : 0.45,
+                    zIndex: i === 0 ? 2 : 1,
+                    cursor: 'pointer',
+                    boxShadow: u.name === user ? `0 0 0 2px rgba(15,12,26,0.9), 0 0 0 3.5px ${u.color}` : 'none',
+                    transform: u.name === user ? 'scale(1.08)' : 'scale(1)',
+                    transition: 'opacity 0.2s, box-shadow 0.2s, transform 0.2s',
+                  }}
+                  onClick={() => selectUser(u.name)}
+                >
                   {u.name}
                 </div>
               ))}
@@ -476,7 +489,7 @@ export default function App() {
               <div style={{ display:'flex', flexDirection:'column', gap:16, maxHeight:360, overflowY:'auto' }}>
                 <div>
                   <div style={S.infoSection}>App</div>
-                  <div style={{ color:'#fff', fontWeight:600 }}>🛒 Einkaufszettel von Melli & Marc <span style={{ color:'rgba(255,255,255,0.4)', fontWeight:400, fontSize:12 }}>v1.8.0</span></div>
+                  <div style={{ color:'#fff', fontWeight:600 }}>🛒 Einkaufszettel von Melli & Marc <span style={{ color:'rgba(255,255,255,0.4)', fontWeight:400, fontSize:12 }}>v1.9.0</span></div>
                 </div>
                 <div>
                   <div style={S.infoSection}>Flow</div>
@@ -489,6 +502,7 @@ export default function App() {
                 <div>
                   <div style={S.infoSection}>Features</div>
                   {[
+                    'Avatar-Umschalter im Header zum schnellen Wechseln',
                     'Gemeinsame Artikelliste für Melli & Marc',
                     'Getrennte Einkaufsstände pro Person',
                     'Echtzeit-Sync zwischen Geräten',
@@ -507,7 +521,11 @@ export default function App() {
                 </div>
                 <div>
                   <div style={S.infoSection}>Changelog</div>
-                  <div style={{ color:'rgba(255,255,255,0.5)', fontSize:11, marginBottom:4 }}>v1.8.0 – 26.05.2026</div>
+                  <div style={{ color:'rgba(255,255,255,0.5)', fontSize:11, marginBottom:4 }}>v1.9.0 – 28.05.2026</div>
+                  {['Avatar-Umschalter im Header (antippen zum Wechseln)','Aktiver Nutzer mit Ring & Scale hervorgehoben'].map(c => (
+                    <div key={c} style={{ color:'rgba(255,255,255,0.7)', fontSize:12, paddingBottom:3 }}>+ {c}</div>
+                  ))}
+                  <div style={{ color:'rgba(255,255,255,0.5)', fontSize:11, marginTop:8, marginBottom:4 }}>v1.8.0 – 26.05.2026</div>
                   {['Drag & Drop für Kategorien (⠿ Handle)','Drag & Drop für Artikel (⠿ Handle)','Reihenfolge persistent in Firestore','Neue Artikel kommen ans Ende der Kategorie'].map(c => (
                     <div key={c} style={{ color:'rgba(255,255,255,0.7)', fontSize:12, paddingBottom:3 }}>+ {c}</div>
                   ))}
