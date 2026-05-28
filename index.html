@@ -23,8 +23,31 @@
     <script type="module" src="/src/main.jsx"></script>
     <script>
       if ('serviceWorker' in navigator) {
+        let reloading = false
+        const reload = () => { if (!reloading) { reloading = true; location.reload() } }
+
+        // Reload when new SW takes control or sends update message
+        navigator.serviceWorker.addEventListener('controllerchange', reload)
+        navigator.serviceWorker.addEventListener('message', e => {
+          if (e.data?.type === 'SW_UPDATED') reload()
+        })
+
+        let swReg = null
         window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/unser-zettel/sw.js')
+          navigator.serviceWorker.register('/unser-zettel/sw.js').then(reg => { swReg = reg })
+        })
+
+        // On each app-foreground: reload if stale (>30 min), else check for SW update
+        let hiddenAt = 0
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'hidden') {
+            hiddenAt = Date.now()
+          } else if (hiddenAt > 0) {
+            const away = Date.now() - hiddenAt
+            hiddenAt = 0
+            if (away > 30 * 60 * 1000) reload()
+            else if (swReg) swReg.update()
+          }
         })
       }
     </script>
