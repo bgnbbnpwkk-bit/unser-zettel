@@ -107,11 +107,13 @@ function SortableItem({ item, ...props }) {
 
 // ── App ───────────────────────────────────────────────────────────────────────
 export default function App() {
+  const [homeUser, setHomeUser] = useState(() => {
+    const saved = localStorage.getItem('zettel-user')
+    return (saved === 'Marc' || saved === 'Melli') ? saved : ''
+  })
   const [user, setUser] = useState(() => {
     const saved = localStorage.getItem('zettel-user')
-    if (saved === 'Marc' || saved === 'Melli') return saved
-    localStorage.removeItem('zettel-user')
-    return ''
+    return (saved === 'Marc' || saved === 'Melli') ? saved : ''
   })
   const [items, setItems] = useState([])
   const [templates, setTemplates] = useState([])
@@ -128,7 +130,8 @@ export default function App() {
   const inputRef = useRef(null)
 
   const closeAll = () => { setShowAdd(false); setShowInfo(false); setSuggestions([]) }
-  const selectUser = (name) => { localStorage.setItem('zettel-user', name); setUser(name) }
+  const selectHomeUser = (name) => { localStorage.setItem('zettel-user', name); setHomeUser(name); setUser(name) }
+  const isForeignMode = homeUser !== '' && user !== homeUser
 
   const getToBuy   = item => item[`toBuy_${user}`]   || false
   const getChecked = item => item[`checked_${user}`] || false
@@ -292,7 +295,7 @@ export default function App() {
     .filter(catId => grouped[catId])
     .map(catId => [catId, getSortedItems(grouped[catId])])
 
-  const avatarOrder = user === 'Marc'
+  const avatarOrder = homeUser === 'Marc'
     ? [{ name: 'Marc', color: '#818cf8' }, { name: 'Melli', color: '#fb7185' }]
     : [{ name: 'Melli', color: '#fb7185' }, { name: 'Marc', color: '#818cf8' }]
 
@@ -301,7 +304,7 @@ export default function App() {
   const activeDragCat = activeDragId?.startsWith('cat-')
     ? getCategoryById(activeDragId.slice(4)) : null
 
-  if (!user) return (
+  if (!homeUser) return (
     <div style={S.root}>
       <div style={S.blob1} /><div style={S.blob2} />
       <div style={S.onboarding}>
@@ -310,8 +313,8 @@ export default function App() {
         <div style={S.onboardingSubtitle}>von Melli & Marc</div>
         <div style={{ color:'rgba(255,255,255,0.4)', fontSize:14, marginTop:24, marginBottom:8 }}>Wer bist du?</div>
         <div style={{ display:'flex', gap:12 }}>
-          <button style={{...S.onboardingBtn, background:'#818cf8', boxShadow:'0 8px 24px rgba(129,140,248,0.4)'}} onClick={() => selectUser('Marc')}>Marc</button>
-          <button style={{...S.onboardingBtn, background:'#fb7185', boxShadow:'0 8px 24px rgba(251,113,133,0.4)'}} onClick={() => selectUser('Melli')}>Melli</button>
+          <button style={{...S.onboardingBtn, background:'#818cf8', boxShadow:'0 8px 24px rgba(129,140,248,0.4)'}} onClick={() => selectHomeUser('Marc')}>Marc</button>
+          <button style={{...S.onboardingBtn, background:'#fb7185', boxShadow:'0 8px 24px rgba(251,113,133,0.4)'}} onClick={() => selectHomeUser('Melli')}>Melli</button>
         </div>
       </div>
     </div>
@@ -334,12 +337,19 @@ export default function App() {
 
         <div style={S.header}>
           <div>
-            <div style={S.appName}>🛒 Einkaufszettel</div>
+            <div style={S.appName}>
+              {isForeignMode ? `👀 ${user}s Zettel` : '🛒 Einkaufszettel'}
+            </div>
             <div style={S.subtitle}>
-              von Melli & Marc
-              {!loading && toBuyCount > 0 && (
-                <span style={{ color:'rgba(255,255,255,0.3)' }}> · {toBuyCount - checkedCount} offen · {checkedCount} im Korb</span>
-              )}
+              {isForeignMode
+                ? <span style={{ color: user === 'Melli' ? '#fb7185' : '#818cf8', opacity: 0.8 }}>eigenen Avatar tippen zum Zurückwechseln</span>
+                : <>
+                    von Melli & Marc
+                    {!loading && toBuyCount > 0 && (
+                      <span style={{ color:'rgba(255,255,255,0.3)' }}> · {toBuyCount - checkedCount} offen · {checkedCount} im Korb</span>
+                    )}
+                  </>
+              }
             </div>
           </div>
           <div style={{ display:'flex', alignItems:'center', gap:8 }}>
@@ -357,7 +367,7 @@ export default function App() {
                     transform: u.name === user ? 'scale(1.08)' : 'scale(1)',
                     transition: 'opacity 0.2s, box-shadow 0.2s, transform 0.2s',
                   }}
-                  onClick={() => selectUser(u.name)}
+                  onClick={() => setUser(u.name)}
                 >
                   {u.name}
                 </div>
@@ -522,7 +532,7 @@ export default function App() {
                 <div>
                   <div style={S.infoSection}>Changelog</div>
                   <div style={{ color:'rgba(255,255,255,0.5)', fontSize:11, marginBottom:4 }}>v1.9.0 – 28.05.2026</div>
-                  {['Avatar-Umschalter im Header (antippen zum Wechseln)','Aktiver Nutzer mit Ring & Scale hervorgehoben'].map(c => (
+                  {['Avatar-Umschalter im Header (antippen zum Wechseln)','Fremd-Modus: Titel zeigt „👀 Mellis/Marcs Zettel"','Eigener Avatar immer links, Hinweis zum Zurückwechseln','Aktiver Nutzer mit Ring & Scale hervorgehoben'].map(c => (
                     <div key={c} style={{ color:'rgba(255,255,255,0.7)', fontSize:12, paddingBottom:3 }}>+ {c}</div>
                   ))}
                   <div style={{ color:'rgba(255,255,255,0.5)', fontSize:11, marginTop:8, marginBottom:4 }}>v1.8.0 – 26.05.2026</div>
