@@ -1,6 +1,6 @@
 {
-  "name": "Einkaufszettel von Melli & Marc",
-  "short_name": "Einkaufszettel",
+  "name": "Unser Einkaufszettel",
+  "short_name": "Unser Zettel",
   "start_url": "/unser-zettel/",
   "display": "standalone",
   "background_color": "#0f0c1a",
