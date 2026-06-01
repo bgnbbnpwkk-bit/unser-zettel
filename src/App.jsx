@@ -3,7 +3,8 @@ import {
   collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc,
   serverTimestamp, query, orderBy, setDoc, increment
 } from 'firebase/firestore'
-import { db } from './firebase.js'
+import { signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth'
+import { db, auth, googleProvider } from './firebase.js'
 import {
   DndContext, closestCenter,
   PointerSensor, TouchSensor,
@@ -16,15 +17,21 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 
+// Erlaubte Google-Accounts → App-Name
+const ALLOWED = {
+  'marc.saenger1975@gmail.com':   'Marc',
+  'melaniechabane1975@gmail.com': 'Melli',
+}
+
 const CATEGORIES = [
-  { id: 'fruit',     label: 'Obst & Gemüse',  emoji: '🥦', color: '#4ade80' },
-  { id: 'dairy',     label: 'Milch & Käse',   emoji: '🥛', color: '#93c5fd' },
-  { id: 'meat',      label: 'Fleisch & Fisch', emoji: '🥩', color: '#f87171' },
-  { id: 'bread',     label: 'Brot & Gebäck',  emoji: '🍞', color: '#fbbf24' },
-  { id: 'drinks',    label: 'Getränke',        emoji: '🥤', color: '#a78bfa' },
-  { id: 'frozen',    label: 'Tiefkühl',        emoji: '❄️', color: '#67e8f9' },
-  { id: 'household', label: 'Haushalt',        emoji: '🧹', color: '#fb923c' },
-  { id: 'other',     label: 'Sonstiges',       emoji: '📦', color: '#d1d5db' },
+  { id: 'fruit',     label: 'Obst & Gemüse',   emoji: '🥦', color: '#4ade80' },
+  { id: 'dairy',     label: 'Milch & Käse',    emoji: '🥛', color: '#93c5fd' },
+  { id: 'meat',      label: 'Fleisch & Fisch',  emoji: '🥩', color: '#f87171' },
+  { id: 'bread',     label: 'Brot & Gebäck',   emoji: '🍞', color: '#fbbf24' },
+  { id: 'drinks',    label: 'Getränke',         emoji: '🥤', color: '#a78bfa' },
+  { id: 'frozen',    label: 'Tiefkühl',         emoji: '❄️', color: '#67e8f9' },
+  { id: 'household', label: 'Haushalt',         emoji: '🧹', color: '#fb923c' },
+  { id: 'other',     label: 'Sonstiges',        emoji: '📦', color: '#d1d5db' },
 ]
 const DEFAULT_CAT_ORDER = CATEGORIES.map(c => c.id)
 
@@ -43,10 +50,20 @@ function getSortedItems(list) {
     if (a.order != null && b.order != null) return a.order - b.order
     if (a.order != null) return -1
     if (b.order != null) return 1
-    const at = a.createdAt?.toMillis?.() ?? 0
-    const bt = b.createdAt?.toMillis?.() ?? 0
-    return at - bt
+    return (a.createdAt?.toMillis?.() ?? 0) - (b.createdAt?.toMillis?.() ?? 0)
   })
+}
+
+// Google „G"-Logo
+function GoogleIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" style={{ flexShrink: 0 }}>
+      <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+      <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+      <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
+      <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+    </svg>
+  )
 }
 
 // ── SortableCatGroup ──────────────────────────────────────────────────────────
@@ -54,7 +71,6 @@ function SortableCatGroup({ catId, cat, catItems, getToBuy, getChecked,
   toggleToBuy, toggleChecked, removeItem }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: `cat-${catId}` })
-
   return (
     <div ref={setNodeRef} style={{
       ...S.catGroup,
@@ -68,16 +84,11 @@ function SortableCatGroup({ catId, cat, catItems, getToBuy, getChecked,
         <span style={S.catLabel}>{cat.emoji} {cat.label}</span>
         <span style={S.catCount}>{catItems.length}</span>
       </div>
-      <SortableContext
-        items={catItems.map(i => `item-${i.id}`)}
-        strategy={verticalListSortingStrategy}
-      >
+      <SortableContext items={catItems.map(i => `item-${i.id}`)} strategy={verticalListSortingStrategy}>
         {catItems.map(item => (
           <SortableItem
-            key={item.id}
-            item={item}
-            toBuy={getToBuy(item)}
-            checked={getChecked(item)}
+            key={item.id} item={item}
+            toBuy={getToBuy(item)} checked={getChecked(item)}
             onToggleToBuy={() => toggleToBuy(item)}
             onToggleChecked={() => toggleChecked(item)}
             onRemove={() => removeItem(item.id)}
@@ -93,13 +104,8 @@ function SortableCatGroup({ catId, cat, catItems, getToBuy, getChecked,
 function SortableItem({ item, ...props }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: `item-${item.id}` })
-
   return (
-    <div ref={setNodeRef} style={{
-      transform: CSS.Transform.toString(transform),
-      transition,
-      opacity: isDragging ? 0.4 : 1,
-    }}>
+    <div ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : 1 }}>
       <ItemRow item={item} dragHandleProps={{ ...attributes, ...listeners }} {...props} />
     </div>
   )
@@ -107,78 +113,117 @@ function SortableItem({ item, ...props }) {
 
 // ── App ───────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [homeUser, setHomeUser] = useState(() => {
-    const saved = localStorage.getItem('zettel-user')
-    return (saved === 'Marc' || saved === 'Melli') ? saved : ''
-  })
-  const [user, setUser] = useState(() => {
-    const saved = localStorage.getItem('zettel-user')
-    return (saved === 'Marc' || saved === 'Melli') ? saved : ''
-  })
-  const [items, setItems] = useState([])
-  const [templates, setTemplates] = useState([])
-  const [catOrder, setCatOrder] = useState(DEFAULT_CAT_ORDER)
-  const [loading, setLoading] = useState(true)
+
+  // ── Auth ─────────────────────────────────────────────────────────────────
+  const [firebaseUser, setFirebaseUser] = useState(null)
+  const [authLoading, setAuthLoading]   = useState(true)
+  const [authError, setAuthError]       = useState('')
+  const [signingIn, setSigningIn]       = useState(false)
+
+  // homeUser ist direkt aus dem Google-Account abgeleitet, kein localStorage
+  const homeUser = firebaseUser ? (ALLOWED[firebaseUser.email] ?? '') : ''
+
+  useEffect(() => {
+    return onAuthStateChanged(auth, async fbUser => {
+      if (fbUser) {
+        if (!ALLOWED[fbUser.email]) {
+          setAuthError(
+            `Dieser Google-Account (${fbUser.email}) ist leider nicht berechtigt. ` +
+            'Nur Melli & Marc dürfen diese App nutzen.'
+          )
+          await signOut(auth)
+          setFirebaseUser(null)
+        } else {
+          setAuthError('')
+          setFirebaseUser(fbUser)
+        }
+      } else {
+        setFirebaseUser(null)
+      }
+      setAuthLoading(false)
+    })
+  }, [])
+
+  const signIn = async () => {
+    setSigningIn(true)
+    setAuthError('')
+    try {
+      await signInWithPopup(auth, googleProvider)
+    } catch (err) {
+      const ignored = ['auth/popup-closed-by-user', 'auth/cancelled-popup-request']
+      if (!ignored.includes(err.code)) {
+        setAuthError('Anmeldung fehlgeschlagen. Bitte versuche es erneut.')
+      }
+    } finally {
+      setSigningIn(false)
+    }
+  }
+
+  // ── App-State ─────────────────────────────────────────────────────────────
+  const [user, setUser]               = useState('')
+  const [items, setItems]             = useState([])
+  const [templates, setTemplates]     = useState([])
+  const [catOrder, setCatOrder]       = useState(DEFAULT_CAT_ORDER)
+  const [loading, setLoading]         = useState(true)
   const [activeFilter, setActiveFilter] = useState('all')
-  const [newItem, setNewItem] = useState('')
+  const [newItem, setNewItem]         = useState('')
   const [newCategory, setNewCategory] = useState('other')
-  const [showAdd, setShowAdd] = useState(false)
-  const [showInfo, setShowInfo] = useState(false)
+  const [showAdd, setShowAdd]         = useState(false)
+  const [showInfo, setShowInfo]       = useState(false)
   const [suggestions, setSuggestions] = useState([])
   const [isLandscape, setIsLandscape] = useState(false)
   const [activeDragId, setActiveDragId] = useState(null)
   const inputRef = useRef(null)
 
-  const closeAll = () => { setShowAdd(false); setShowInfo(false); setSuggestions([]) }
-  const selectHomeUser = (name) => { localStorage.setItem('zettel-user', name); setHomeUser(name); setUser(name) }
+  const closeAll     = () => { setShowAdd(false); setShowInfo(false); setSuggestions([]) }
   const isForeignMode = homeUser !== '' && user !== homeUser
+  const getToBuy     = item => item[`toBuy_${user}`]   || false
+  const getChecked   = item => item[`checked_${user}`] || false
 
-  const getToBuy   = item => item[`toBuy_${user}`]   || false
-  const getChecked = item => item[`checked_${user}`] || false
+  // user immer mit homeUser synchronisieren (beim Login/Logout)
+  useEffect(() => { if (homeUser) setUser(homeUser) }, [homeUser])
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
-    useSensor(TouchSensor,   { activationConstraint: { delay: 250, tolerance: 8 } })
-  )
-
+  // Querformat-Erkennung
   useEffect(() => {
     const check = () => {
-      const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)
-      setIsLandscape(isMobile && window.innerWidth > window.innerHeight)
+      const mob = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)
+      setIsLandscape(mob && window.innerWidth > window.innerHeight)
     }
     check()
     window.addEventListener('resize', check)
     return () => window.removeEventListener('resize', check)
   }, [])
 
-  // Kategorie-Reihenfolge aus Firestore
+  // Firestore: nur wenn eingeloggt
   useEffect(() => {
+    if (!firebaseUser) { setItems([]); setLoading(true); return }
     return onSnapshot(doc(db, 'settings', 'categoryOrder'), snap => {
       if (snap.exists()) {
         const saved = snap.data().order
-        const merged = [
+        setCatOrder([
           ...saved.filter(id => DEFAULT_CAT_ORDER.includes(id)),
           ...DEFAULT_CAT_ORDER.filter(id => !saved.includes(id)),
-        ]
-        setCatOrder(merged)
+        ])
       }
     })
-  }, [])
+  }, [firebaseUser])
 
   useEffect(() => {
+    if (!firebaseUser) return
     const q = query(collection(db, 'items'), orderBy('createdAt', 'asc'))
     return onSnapshot(q, snap => {
       setItems(snap.docs.map(d => ({ id: d.id, ...d.data() })))
       setLoading(false)
     })
-  }, [])
+  }, [firebaseUser])
 
   useEffect(() => {
+    if (!firebaseUser) return
     const q = query(collection(db, 'templates'), orderBy('usedCount', 'desc'))
     return onSnapshot(q, snap => {
       setTemplates(snap.docs.map(d => ({ id: d.id, ...d.data() })))
     })
-  }, [])
+  }, [firebaseUser])
 
   useEffect(() => {
     if (!newItem.trim() || newItem.length < 2) { setSuggestions([]); return }
@@ -189,6 +234,11 @@ export default function App() {
   useEffect(() => {
     if (showAdd && inputRef.current) setTimeout(() => inputRef.current?.focus(), 100)
   }, [showAdd])
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(TouchSensor,   { activationConstraint: { delay: 250, tolerance: 8 } })
+  )
 
   const upsertTemplate = async (name, category) => {
     const ref = doc(db, 'templates', toTemplateId(name))
@@ -212,24 +262,19 @@ export default function App() {
       toBuy_Melli: false, checked_Melli: false,
     })
     await upsertTemplate(n, c)
-    setNewItem('')
-    setSuggestions([])
-    setShowAdd(false)
+    setNewItem(''); setSuggestions([]); setShowAdd(false)
   }
 
   const toggleToBuy = async item => {
-    const current = getToBuy(item)
     await updateDoc(doc(db, 'items', item.id), {
-      [`toBuy_${user}`]: !current,
+      [`toBuy_${user}`]:   !getToBuy(item),
       [`checked_${user}`]: false,
     })
   }
 
   const toggleChecked = async item => {
     if (!getToBuy(item)) return
-    await updateDoc(doc(db, 'items', item.id), {
-      [`checked_${user}`]: !getChecked(item)
-    })
+    await updateDoc(doc(db, 'items', item.id), { [`checked_${user}`]: !getChecked(item) })
   }
 
   const removeItem = async id => deleteDoc(doc(db, 'items', id))
@@ -237,22 +282,17 @@ export default function App() {
   const finishShopping = async () =>
     Promise.all(items.filter(i => getToBuy(i)).map(i =>
       updateDoc(doc(db, 'items', i.id), {
-        [`toBuy_${user}`]: false,
-        [`checked_${user}`]: false,
+        [`toBuy_${user}`]: false, [`checked_${user}`]: false,
       })
     ))
 
   const handleDragEnd = async ({ active, over }) => {
     setActiveDragId(null)
     if (!over || active.id === over.id) return
-    const aId = String(active.id)
-    const oId = String(over.id)
+    const aId = String(active.id), oId = String(over.id)
 
     if (aId.startsWith('cat-') && oId.startsWith('cat-')) {
-      const aCatId = aId.slice(4)
-      const oCatId = oId.slice(4)
-      const ai = catOrder.indexOf(aCatId)
-      const oi = catOrder.indexOf(oCatId)
+      const ai = catOrder.indexOf(aId.slice(4)), oi = catOrder.indexOf(oId.slice(4))
       if (ai < 0 || oi < 0) return
       const newOrder = arrayMove(catOrder, ai, oi)
       setCatOrder(newOrder)
@@ -261,15 +301,15 @@ export default function App() {
     }
 
     if (aId.startsWith('item-') && oId.startsWith('item-')) {
-      const aItemId = aId.slice(5)
-      const oItemId = oId.slice(5)
-      const aItem = items.find(i => i.id === aItemId)
-      const oItem = items.find(i => i.id === oItemId)
+      const aItem = items.find(i => i.id === aId.slice(5))
+      const oItem = items.find(i => i.id === oId.slice(5))
       if (!aItem || !oItem || aItem.category !== oItem.category) return
       const catItems = getSortedItems(items.filter(i => i.category === aItem.category))
-      const ai = catItems.findIndex(i => i.id === aItemId)
-      const oi = catItems.findIndex(i => i.id === oItemId)
-      const reordered = arrayMove(catItems, ai, oi)
+      const reordered = arrayMove(
+        catItems,
+        catItems.findIndex(i => i.id === aItem.id),
+        catItems.findIndex(i => i.id === oItem.id)
+      )
       await Promise.all(reordered.map((item, idx) =>
         updateDoc(doc(db, 'items', item.id), { order: idx })
       ))
@@ -301,21 +341,39 @@ export default function App() {
 
   const activeDragItem = activeDragId?.startsWith('item-')
     ? items.find(i => i.id === activeDragId.slice(5)) : null
-  const activeDragCat = activeDragId?.startsWith('cat-')
+  const activeDragCat  = activeDragId?.startsWith('cat-')
     ? getCategoryById(activeDragId.slice(4)) : null
 
-  if (!homeUser) return (
+  // ── Screens ──────────────────────────────────────────────────────────────
+
+  if (authLoading) return (
+    <div style={S.root}>
+      <div style={S.blob1} /><div style={S.blob2} />
+      <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:16 }}>
+        <div style={S.spinner} />
+        <div style={{ color:'rgba(255,255,255,0.3)', fontSize:14 }}>Laden…</div>
+      </div>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+    </div>
+  )
+
+  if (!firebaseUser) return (
     <div style={S.root}>
       <div style={S.blob1} /><div style={S.blob2} />
       <div style={S.onboarding}>
         <div style={{ fontSize:56, marginBottom:16 }}>🛒</div>
-        <div style={S.onboardingTitle}>Einkaufszettel</div>
-        <div style={S.onboardingSubtitle}>von Melli & Marc</div>
-        <div style={{ color:'rgba(255,255,255,0.4)', fontSize:14, marginTop:24, marginBottom:8 }}>Wer bist du?</div>
-        <div style={{ display:'flex', gap:12 }}>
-          <button style={{...S.onboardingBtn, background:'#818cf8', boxShadow:'0 8px 24px rgba(129,140,248,0.4)'}} onClick={() => selectHomeUser('Marc')}>Marc</button>
-          <button style={{...S.onboardingBtn, background:'#fb7185', boxShadow:'0 8px 24px rgba(251,113,133,0.4)'}} onClick={() => selectHomeUser('Melli')}>Melli</button>
-        </div>
+        <div style={S.onboardingTitle}>Unser Zettel</div>
+        <div style={S.onboardingSubtitle}>von Melli &amp; Marc</div>
+
+        {authError
+          ? <div style={S.authError}>{authError}</div>
+          : <div style={{ color:'rgba(255,255,255,0.3)', fontSize:13, marginTop:20 }}>Bitte melde dich an um fortzufahren</div>
+        }
+
+        <button style={{...S.googleBtn, opacity: signingIn ? 0.6 : 1}} onClick={signIn} disabled={signingIn}>
+          <GoogleIcon />
+          {signingIn ? 'Anmelden…' : 'Mit Google anmelden'}
+        </button>
       </div>
     </div>
   )
@@ -335,6 +393,7 @@ export default function App() {
       <div style={S.blob1} /><div style={S.blob2} />
       <div style={S.frame}>
 
+        {/* ── Header ── */}
         <div style={S.header}>
           <div>
             <div style={S.appName}>
@@ -342,9 +401,9 @@ export default function App() {
             </div>
             <div style={S.subtitle}>
               {isForeignMode
-                ? <span style={{ color: user === 'Melli' ? '#fb7185' : '#818cf8', opacity: 0.8 }}>eigenen Avatar tippen zum Zurückwechseln</span>
+                ? <span style={{ color: user === 'Melli' ? '#fb7185' : '#818cf8', opacity:.8 }}>eigenen Avatar tippen zum Zurückwechseln</span>
                 : <>
-                    von Melli & Marc
+                    von Melli &amp; Marc
                     {!loading && toBuyCount > 0 && (
                       <span style={{ color:'rgba(255,255,255,0.3)' }}> · {toBuyCount - checkedCount} offen · {checkedCount} im Korb</span>
                     )}
@@ -352,7 +411,7 @@ export default function App() {
               }
             </div>
           </div>
-          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:6 }}>
             <div style={S.avatars}>
               {avatarOrder.map((u, i) => (
                 <div key={u.name}
@@ -363,9 +422,9 @@ export default function App() {
                     opacity: u.name === user ? 1 : 0.45,
                     zIndex: i === 0 ? 2 : 1,
                     cursor: 'pointer',
-                    boxShadow: u.name === user ? `0 0 0 2px rgba(15,12,26,0.9), 0 0 0 3.5px ${u.color}` : 'none',
+                    boxShadow: u.name === user ? `0 0 0 2px rgba(15,12,26,0.9),0 0 0 3.5px ${u.color}` : 'none',
                     transform: u.name === user ? 'scale(1.08)' : 'scale(1)',
-                    transition: 'opacity 0.2s, box-shadow 0.2s, transform 0.2s',
+                    transition: 'opacity .2s,box-shadow .2s,transform .2s',
                   }}
                   onClick={() => setUser(u.name)}
                 >
@@ -377,20 +436,22 @@ export default function App() {
           </div>
         </div>
 
+        {/* ── Filter-Chips ── */}
         <div style={S.filterRow}>
-          <Chip label="Alle" active={activeFilter==='all'} onClick={() => setActiveFilter('all')} />
-          <Chip label="🛒 Heute" active={activeFilter==='today'} onClick={() => setActiveFilter('today')} color="#a78bfa" />
+          <Chip label="Alle"     active={activeFilter==='all'}     onClick={() => setActiveFilter('all')} />
+          <Chip label="🛒 Heute" active={activeFilter==='today'}   onClick={() => setActiveFilter('today')} color="#a78bfa" />
           {CATEGORIES.filter(c => items.some(i => i.category===c.id)).map(cat => (
             <Chip key={cat.id} label={cat.emoji} active={activeFilter===cat.id} onClick={() => setActiveFilter(cat.id)} color={cat.color} />
           ))}
           {checkedCount > 0 && <Chip label="✓" active={activeFilter==='checked'} onClick={() => setActiveFilter('checked')} color="#86efac" />}
         </div>
 
+        {/* ── Liste ── */}
         <div style={S.list}>
           {!loading && orderedGroups.length === 0 && (
             <div style={S.empty}>
-              <div style={{fontSize:40}}>🛍️</div>
-              <div style={{color:'rgba(255,255,255,0.4)',marginTop:8}}>
+              <div style={{ fontSize:40 }}>🛍️</div>
+              <div style={{ color:'rgba(255,255,255,0.4)', marginTop:8 }}>
                 {activeFilter === 'today' ? 'Noch nichts für heute ausgewählt' : 'Hier ist noch nichts'}
               </div>
             </div>
@@ -403,26 +464,17 @@ export default function App() {
             onDragEnd={handleDragEnd}
             onDragCancel={() => setActiveDragId(null)}
           >
-            <SortableContext
-              items={orderedGroups.map(([catId]) => `cat-${catId}`)}
-              strategy={verticalListSortingStrategy}
-            >
-              {orderedGroups.map(([catId, catItems]) => {
-                const cat = getCategoryById(catId)
-                return (
-                  <SortableCatGroup
-                    key={catId}
-                    catId={catId}
-                    cat={cat}
-                    catItems={catItems}
-                    getToBuy={getToBuy}
-                    getChecked={getChecked}
-                    toggleToBuy={toggleToBuy}
-                    toggleChecked={toggleChecked}
-                    removeItem={removeItem}
-                  />
-                )
-              })}
+            <SortableContext items={orderedGroups.map(([id]) => `cat-${id}`)} strategy={verticalListSortingStrategy}>
+              {orderedGroups.map(([catId, catItems]) => (
+                <SortableCatGroup
+                  key={catId} catId={catId}
+                  cat={getCategoryById(catId)}
+                  catItems={catItems}
+                  getToBuy={getToBuy} getChecked={getChecked}
+                  toggleToBuy={toggleToBuy} toggleChecked={toggleChecked}
+                  removeItem={removeItem}
+                />
+              ))}
             </SortableContext>
 
             <DragOverlay>
@@ -453,6 +505,7 @@ export default function App() {
           <button style={S.fab} onClick={() => setShowAdd(true)}>+</button>
         )}
 
+        {/* ── Panel: Artikel hinzufügen ── */}
         {showAdd && (
           <div style={S.panel}>
             <div style={S.panelInner}>
@@ -460,7 +513,7 @@ export default function App() {
                 <input ref={inputRef} style={S.input} value={newItem}
                   onChange={e => setNewItem(e.target.value)}
                   placeholder="Artikel eingeben…"
-                  onKeyDown={e => e.key==='Enter' && addItem()} />
+                  onKeyDown={e => e.key === 'Enter' && addItem()} />
                 {suggestions.length > 0 && (
                   <div style={S.suggestions}>
                     {suggestions.map(s => (
@@ -482,13 +535,14 @@ export default function App() {
                 ))}
               </div>
               <div style={S.actions}>
-                <button style={S.cancel} onClick={closeAll}>Abbrechen</button>
+                <button style={S.cancel}  onClick={closeAll}>Abbrechen</button>
                 <button style={S.confirm} onClick={() => addItem()}>Hinzufügen</button>
               </div>
             </div>
           </div>
         )}
 
+        {/* ── Panel: Info ── */}
         {showInfo && (
           <div style={S.panel}>
             <div style={S.panelInner}>
@@ -496,10 +550,28 @@ export default function App() {
                 <span style={{ color:'#fff', fontWeight:700, fontSize:16 }}>ℹ️ Über diese App</span>
                 <button style={{...S.cancel, flex:'none', padding:'6px 14px'}} onClick={closeAll}>✕</button>
               </div>
-              <div style={{ display:'flex', flexDirection:'column', gap:16, maxHeight:360, overflowY:'auto' }}>
+
+              {/* User-Profil + Abmelden */}
+              <div style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 12px', background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.07)', borderRadius:12, marginBottom:4 }}>
+                {firebaseUser.photoURL
+                  ? <img src={firebaseUser.photoURL} style={{ width:34, height:34, borderRadius:'50%', flexShrink:0 }} alt="" />
+                  : <div style={{ width:34, height:34, borderRadius:'50%', background: homeUser==='Marc'?'#818cf8':'#fb7185', display:'flex', alignItems:'center', justifyContent:'center', fontSize:13, fontWeight:700, color:'#fff', flexShrink:0 }}>{homeUser[0]}</div>
+                }
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ color:'#fff', fontWeight:600, fontSize:13 }}>{firebaseUser.displayName}</div>
+                  <div style={{ color:'rgba(255,255,255,0.35)', fontSize:11, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{firebaseUser.email}</div>
+                </div>
+                <button
+                  style={{...S.cancel, flex:'none', padding:'6px 14px', fontSize:12, color:'rgba(251,113,133,0.85)', borderColor:'rgba(251,113,133,0.25)'}}
+                  onClick={() => { closeAll(); signOut(auth) }}>
+                  Abmelden
+                </button>
+              </div>
+
+              <div style={{ display:'flex', flexDirection:'column', gap:16, maxHeight:300, overflowY:'auto' }}>
                 <div>
                   <div style={S.infoSection}>App</div>
-                  <div style={{ color:'#fff', fontWeight:600 }}>🛒 Einkaufszettel von Melli & Marc <span style={{ color:'rgba(255,255,255,0.4)', fontWeight:400, fontSize:12 }}>v1.9.0</span></div>
+                  <div style={{ color:'#fff', fontWeight:600 }}>🛒 Einkaufszettel von Melli &amp; Marc <span style={{ color:'rgba(255,255,255,0.4)', fontWeight:400, fontSize:12 }}>v2.0.0</span></div>
                 </div>
                 <div>
                   <div style={S.infoSection}>Flow</div>
@@ -512,6 +584,7 @@ export default function App() {
                 <div>
                   <div style={S.infoSection}>Features</div>
                   {[
+                    'Google-Login – nur Melli & Marc haben Zugang',
                     'Avatar-Umschalter im Header zum schnellen Wechseln',
                     'Gemeinsame Artikelliste für Melli & Marc',
                     'Getrennte Einkaufsstände pro Person',
@@ -524,33 +597,41 @@ export default function App() {
                     'Autocomplete beim Tippen',
                     'Einkauf beenden – eigenen Stand zurücksetzen',
                     'Sicherheitsabfrage beim Löschen',
-                    'Hochformat-Optimierung für Mobilgeräte',
+                    'Auto-Update via Service Worker',
                   ].map(f => (
                     <div key={f} style={{ color:'rgba(255,255,255,0.7)', fontSize:13, paddingBottom:4 }}>✓ {f}</div>
                   ))}
                 </div>
                 <div>
                   <div style={S.infoSection}>Changelog</div>
-                  <div style={{ color:'rgba(255,255,255,0.5)', fontSize:11, marginBottom:4 }}>v1.9.0 – 28.05.2026</div>
-                  {['Avatar-Umschalter im Header (antippen zum Wechseln)','Fremd-Modus: Titel zeigt „👀 Mellis/Marcs Zettel"','Eigener Avatar immer links, Hinweis zum Zurückwechseln','Aktiver Nutzer mit Ring & Scale hervorgehoben'].map(c => (
+                  <div style={{ color:'rgba(255,255,255,0.5)', fontSize:11, marginBottom:4 }}>v2.0.0 – 01.06.2026</div>
+                  {[
+                    'Google-Authentifizierung (nur Melli & Marc)',
+                    'Firestore Security Rules (nur auth. Nutzer)',
+                    'User-Profil & Abmelden-Button im ℹ️-Panel',
+                    'homeUser direkt aus Google-Account abgeleitet',
+                  ].map(c => (
+                    <div key={c} style={{ color:'rgba(255,255,255,0.7)', fontSize:12, paddingBottom:3 }}>+ {c}</div>
+                  ))}
+                  <div style={{ color:'rgba(255,255,255,0.5)', fontSize:11, marginTop:8, marginBottom:4 }}>v1.9.0 – 28.05.2026</div>
+                  {['Avatar-Umschalter im Header','Fremd-Modus: Titel zeigt „👀 Mellis/Marcs Zettel"'].map(c => (
                     <div key={c} style={{ color:'rgba(255,255,255,0.7)', fontSize:12, paddingBottom:3 }}>+ {c}</div>
                   ))}
                   <div style={{ color:'rgba(255,255,255,0.5)', fontSize:11, marginTop:8, marginBottom:4 }}>v1.8.0 – 26.05.2026</div>
-                  {['Drag & Drop für Kategorien (⠿ Handle)','Drag & Drop für Artikel (⠿ Handle)','Reihenfolge persistent in Firestore','Neue Artikel kommen ans Ende der Kategorie'].map(c => (
-                    <div key={c} style={{ color:'rgba(255,255,255,0.7)', fontSize:12, paddingBottom:3 }}>+ {c}</div>
-                  ))}
-                  <div style={{ color:'rgba(255,255,255,0.5)', fontSize:11, marginTop:8, marginBottom:4 }}>v1.7.0 – 26.05.2026</div>
-                  {['Getrennte Einkaufsstände pro Person','toBuy & checked jetzt pro User'].map(c => (
-                    <div key={c} style={{ color:'rgba(255,255,255,0.7)', fontSize:12, paddingBottom:3 }}>+ {c}</div>
-                  ))}
-                  <div style={{ color:'rgba(255,255,255,0.5)', fontSize:11, marginTop:8, marginBottom:4 }}>v1.6.0 – 26.05.2026</div>
-                  {['Neuer Einkaufs-Flow','🛒 Selektion','Kategorien in fester Reihenfolge'].map(c => (
+                  {['Drag & Drop für Kategorien & Artikel','Reihenfolge persistent in Firestore'].map(c => (
                     <div key={c} style={{ color:'rgba(255,255,255,0.7)', fontSize:12, paddingBottom:3 }}>+ {c}</div>
                   ))}
                 </div>
                 <div>
                   <div style={S.infoSection}>Tech Stack</div>
-                  {[['Frontend','React + Vite'],['Drag & Drop','@dnd-kit'],['Datenbank','Firebase Firestore'],['Hosting','GitHub Pages'],['CI/CD','GitHub Actions']].map(([k,v]) => (
+                  {[
+                    ['Frontend',  'React + Vite'],
+                    ['Auth',      'Firebase Auth (Google)'],
+                    ['Drag & Drop','@dnd-kit'],
+                    ['Datenbank', 'Firebase Firestore'],
+                    ['Hosting',   'GitHub Pages'],
+                    ['CI/CD',     'GitHub Actions'],
+                  ].map(([k, v]) => (
                     <div key={k} style={{ display:'flex', justifyContent:'space-between', paddingBottom:4 }}>
                       <span style={{ color:'rgba(255,255,255,0.4)', fontSize:12 }}>{k}</span>
                       <span style={{ color:'rgba(255,255,255,0.7)', fontSize:12 }}>{v}</span>
@@ -561,28 +642,29 @@ export default function App() {
             </div>
           </div>
         )}
+
       </div>
     </div>
   )
 }
 
+// ── Chip ──────────────────────────────────────────────────────────────────────
 function Chip({ label, active, onClick, color }) {
   return (
     <button style={{...S.chip,
-      background: active?(color?color+'33':'rgba(255,255,255,0.15)'):'rgba(255,255,255,0.06)',
-      border: `1.5px solid ${active?(color||'rgba(255,255,255,0.5)'):'rgba(255,255,255,0.1)'}`,
-      color: active?'#fff':'rgba(255,255,255,0.5)'
+      background: active ? (color ? color+'33' : 'rgba(255,255,255,0.15)') : 'rgba(255,255,255,0.06)',
+      border: `1.5px solid ${active ? (color || 'rgba(255,255,255,0.5)') : 'rgba(255,255,255,0.1)'}`,
+      color: active ? '#fff' : 'rgba(255,255,255,0.5)',
     }} onClick={onClick}>{label}</button>
   )
 }
 
+// ── ItemRow ───────────────────────────────────────────────────────────────────
 function ItemRow({ item, toBuy, checked, onToggleToBuy, onToggleChecked, onRemove, catColor, dragHandleProps }) {
   return (
     <div style={{...S.itemRow, opacity: toBuy ? 1 : 0.5}}>
       <span style={S.dragHandle} {...dragHandleProps}>⠿</span>
-      <button style={{...S.cartBtn, color: toBuy ? '#a78bfa' : 'rgba(255,255,255,0.25)'}} onClick={onToggleToBuy}>
-        🛒
-      </button>
+      <button style={{...S.cartBtn, color: toBuy ? '#a78bfa' : 'rgba(255,255,255,0.25)'}} onClick={onToggleToBuy}>🛒</button>
       <div style={S.itemContent}>
         <span style={{...S.itemName, textDecoration: checked ? 'line-through' : 'none'}}>{item.name}</span>
       </div>
@@ -591,56 +673,57 @@ function ItemRow({ item, toBuy, checked, onToggleToBuy, onToggleChecked, onRemov
           {checked && <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6L5 9L10 3" stroke={catColor} strokeWidth="2" strokeLinecap="round"/></svg>}
         </button>
       )}
-      <button style={S.removeBtn} onClick={() => {
-        if (window.confirm(`"${item.name}" wirklich löschen?`)) onRemove()
-      }}>×</button>
+      <button style={S.removeBtn} onClick={() => { if (window.confirm(`"${item.name}" wirklich löschen?`)) onRemove() }}>×</button>
     </div>
   )
 }
 
+// ── Styles ────────────────────────────────────────────────────────────────────
 const S = {
-  root: { position:'fixed', inset:0, background:'linear-gradient(135deg,#0f0c1a 0%,#1a1030 50%,#0d1829 100%)', display:'flex', alignItems:'center', justifyContent:'center', fontFamily:"'Outfit',sans-serif", overflow:'hidden', overscrollBehavior:'none' },
-  blob1: { position:'absolute', top:-100, right:-80, width:350, height:350, borderRadius:'50%', background:'radial-gradient(circle,rgba(129,140,248,0.15) 0%,transparent 70%)', pointerEvents:'none' },
-  blob2: { position:'absolute', bottom:-80, left:-60, width:300, height:300, borderRadius:'50%', background:'radial-gradient(circle,rgba(251,113,133,0.12) 0%,transparent 70%)', pointerEvents:'none' },
-  frame: { width:'100%', maxWidth:390, height:'100%', background:'rgba(15,12,26,0.85)', backdropFilter:'blur(20px)', border:'1px solid rgba(255,255,255,0.08)', boxShadow:'0 30px 80px rgba(0,0,0,0.6)', display:'flex', flexDirection:'column', overflow:'hidden', position:'relative', paddingTop:'env(safe-area-inset-top)' },
-  onboarding: { display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100%', padding:32, textAlign:'center', position:'relative', zIndex:1 },
-  onboardingTitle: { fontSize:28, fontWeight:700, color:'#fff', letterSpacing:'-0.5px' },
+  root:           { position:'fixed', inset:0, background:'linear-gradient(135deg,#0f0c1a 0%,#1a1030 50%,#0d1829 100%)', display:'flex', alignItems:'center', justifyContent:'center', fontFamily:"'Outfit',sans-serif", overflow:'hidden', overscrollBehavior:'none' },
+  blob1:          { position:'absolute', top:-100, right:-80, width:350, height:350, borderRadius:'50%', background:'radial-gradient(circle,rgba(129,140,248,0.15) 0%,transparent 70%)', pointerEvents:'none' },
+  blob2:          { position:'absolute', bottom:-80, left:-60, width:300, height:300, borderRadius:'50%', background:'radial-gradient(circle,rgba(251,113,133,0.12) 0%,transparent 70%)', pointerEvents:'none' },
+  spinner:        { width:36, height:36, borderRadius:'50%', border:'3px solid rgba(129,140,248,0.25)', borderTopColor:'#818cf8', animation:'spin 0.8s linear infinite' },
+  frame:          { width:'100%', maxWidth:390, height:'100%', background:'rgba(15,12,26,0.85)', backdropFilter:'blur(20px)', border:'1px solid rgba(255,255,255,0.08)', boxShadow:'0 30px 80px rgba(0,0,0,0.6)', display:'flex', flexDirection:'column', overflow:'hidden', position:'relative', paddingTop:'env(safe-area-inset-top)' },
+  onboarding:     { display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100%', padding:32, textAlign:'center', position:'relative', zIndex:1 },
+  onboardingTitle:    { fontSize:28, fontWeight:700, color:'#fff', letterSpacing:'-0.5px' },
   onboardingSubtitle: { fontSize:16, color:'rgba(255,255,255,0.5)', marginTop:4 },
-  onboardingBtn: { padding:'16px 32px', borderRadius:16, border:'none', color:'#fff', fontSize:18, fontWeight:700, cursor:'pointer', fontFamily:'inherit', minWidth:120 },
-  header: { padding:'20px 20px 12px', display:'flex', justifyContent:'space-between', alignItems:'flex-start', borderBottom:'1px solid rgba(255,255,255,0.06)', flexShrink:0 },
-  appName: { fontSize:18, fontWeight:700, color:'#fff', letterSpacing:'-0.3px' },
-  subtitle: { fontSize:11, color:'rgba(255,255,255,0.6)', marginTop:2 },
-  avatars: { display:'flex', alignItems:'center' },
-  avatar: { height:28, paddingLeft:10, paddingRight:10, borderRadius:14, display:'flex', alignItems:'center', justifyContent:'center', fontSize:11, fontWeight:700, color:'#fff', border:'2px solid rgba(15,12,26,0.9)', whiteSpace:'nowrap', transition:'opacity 0.2s' },
-  infoBtn: { background:'transparent', border:'none', fontSize:14, cursor:'pointer', opacity:0.4, padding:'4px' },
-  filterRow: { display:'flex', gap:6, padding:'10px 16px', overflowX:'auto', scrollbarWidth:'none', flexShrink:0 },
-  chip: { padding:'5px 12px', borderRadius:20, fontSize:12, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' },
-  list: { flex:1, overflowY:'auto', padding:'8px 16px 80px', scrollbarWidth:'none', overscrollBehavior:'contain' },
-  empty: { display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', paddingTop:80 },
-  catGroup: { marginBottom:20 },
-  catHeader: { display:'flex', alignItems:'center', gap:6, marginBottom:8, paddingLeft:2 },
-  catDot: { width:6, height:6, borderRadius:'50%', flexShrink:0 },
-  catLabel: { fontSize:11, fontWeight:600, color:'rgba(255,255,255,0.4)', letterSpacing:'0.6px', textTransform:'uppercase', flex:1 },
-  catCount: { fontSize:11, color:'rgba(255,255,255,0.25)', fontWeight:600 },
-  dragHandle: { display:'inline-flex', alignItems:'center', justifyContent:'center', width:20, height:20, color:'rgba(255,255,255,0.2)', cursor:'grab', fontSize:14, flexShrink:0, touchAction:'none', userSelect:'none' },
-  itemRow: { display:'flex', alignItems:'center', gap:8, padding:'10px 12px', borderRadius:12, marginBottom:4, border:'1px solid rgba(255,255,255,0.05)', background:'rgba(255,255,255,0.04)', transition:'opacity 0.2s' },
-  cartBtn: { width:28, height:28, border:'none', background:'transparent', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, fontSize:16, transition:'color 0.2s', padding:0 },
-  itemContent: { flex:1, display:'flex', flexDirection:'column', gap:1, minWidth:0 },
-  itemName: { fontSize:15, color:'#fff', fontWeight:500, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' },
-  checkbox: { width:22, height:22, borderRadius:7, border:'1.5px solid', background:'transparent', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 },
-  removeBtn: { width:22, height:22, borderRadius:'50%', border:'none', background:'rgba(255,255,255,0.06)', color:'rgba(255,255,255,0.3)', cursor:'pointer', fontSize:16, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 },
-  finishBtn: { width:'100%', padding:'14px', marginTop:12, borderRadius:16, border:'none', background:'linear-gradient(135deg,#818cf8 0%,#c084fc 100%)', color:'#fff', fontSize:14, fontWeight:700, cursor:'pointer', boxShadow:'0 4px 16px rgba(129,140,248,0.35)' },
-  fab: { position:'absolute', bottom:24, right:20, width:56, height:56, borderRadius:'50%', background:'linear-gradient(135deg,#818cf8 0%,#c084fc 100%)', border:'none', color:'#fff', fontSize:28, cursor:'pointer', boxShadow:'0 8px 24px rgba(129,140,248,0.45)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:10 },
-  panel: { position:'absolute', bottom:0, left:0, right:0, background:'rgba(20,16,36,0.97)', backdropFilter:'blur(20px)', borderTop:'1px solid rgba(255,255,255,0.08)', borderRadius:'24px 24px 0 0', padding:'20px 20px 36px', zIndex:20 },
-  panelInner: { display:'flex', flexDirection:'column', gap:12 },
-  input: { background:'rgba(255,255,255,0.07)', border:'1px solid rgba(255,255,255,0.12)', borderRadius:12, padding:'13px 16px', fontSize:15, color:'#fff', outline:'none', width:'100%', boxSizing:'border-box', fontFamily:'inherit' },
-  suggestions: { position:'absolute', top:'100%', left:0, right:0, background:'rgba(22,18,42,0.99)', border:'1px solid rgba(255,255,255,0.1)', borderTop:'none', borderRadius:'0 0 12px 12px', overflow:'hidden', zIndex:30 },
-  suggestion: { width:'100%', display:'flex', alignItems:'center', gap:10, padding:'10px 14px', background:'transparent', border:'none', borderBottom:'1px solid rgba(255,255,255,0.05)', color:'rgba(255,255,255,0.85)', fontSize:14, cursor:'pointer' },
-  catSelect: { display:'flex', gap:6, flexWrap:'wrap' },
-  catBtn: { width:38, height:38, borderRadius:10, fontSize:18, cursor:'pointer' },
-  actions: { display:'flex', gap:8 },
-  cancel: { flex:1, padding:'12px', borderRadius:12, border:'1px solid rgba(255,255,255,0.1)', background:'transparent', color:'rgba(255,255,255,0.5)', fontSize:14, fontWeight:600, cursor:'pointer', fontFamily:'inherit' },
-  confirm: { flex:2, padding:'12px', borderRadius:12, border:'none', background:'linear-gradient(135deg,#818cf8 0%,#c084fc 100%)', color:'#fff', fontSize:14, fontWeight:700, cursor:'pointer', fontFamily:'inherit' },
-  infoSection: { color:'#818cf8', fontWeight:700, fontSize:11, letterSpacing:'0.6px', textTransform:'uppercase', marginBottom:8, marginTop:4 },
+  authError:      { marginTop:20, padding:'12px 16px', background:'rgba(251,113,133,0.12)', border:'1px solid rgba(251,113,133,0.25)', borderRadius:12, color:'#fb7185', fontSize:13, lineHeight:1.5, maxWidth:280 },
+  googleBtn:      { marginTop:28, display:'flex', alignItems:'center', gap:12, padding:'14px 24px', borderRadius:14, border:'1px solid rgba(255,255,255,0.15)', background:'rgba(255,255,255,0.06)', color:'#fff', fontSize:15, fontWeight:600, cursor:'pointer', fontFamily:'inherit', backdropFilter:'blur(10px)', transition:'opacity .2s' },
+  header:         { padding:'20px 20px 12px', display:'flex', justifyContent:'space-between', alignItems:'flex-start', borderBottom:'1px solid rgba(255,255,255,0.06)', flexShrink:0 },
+  appName:        { fontSize:18, fontWeight:700, color:'#fff', letterSpacing:'-0.3px' },
+  subtitle:       { fontSize:11, color:'rgba(255,255,255,0.6)', marginTop:2 },
+  avatars:        { display:'flex', alignItems:'center' },
+  avatar:         { height:28, paddingLeft:10, paddingRight:10, borderRadius:14, display:'flex', alignItems:'center', justifyContent:'center', fontSize:11, fontWeight:700, color:'#fff', border:'2px solid rgba(15,12,26,0.9)', whiteSpace:'nowrap' },
+  infoBtn:        { background:'transparent', border:'none', fontSize:14, cursor:'pointer', opacity:0.4, padding:'4px' },
+  filterRow:      { display:'flex', gap:6, padding:'10px 16px', overflowX:'auto', scrollbarWidth:'none', flexShrink:0 },
+  chip:           { padding:'5px 12px', borderRadius:20, fontSize:12, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' },
+  list:           { flex:1, overflowY:'auto', padding:'8px 16px 80px', scrollbarWidth:'none', overscrollBehavior:'contain' },
+  empty:          { display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', paddingTop:80 },
+  catGroup:       { marginBottom:20 },
+  catHeader:      { display:'flex', alignItems:'center', gap:6, marginBottom:8, paddingLeft:2 },
+  catDot:         { width:6, height:6, borderRadius:'50%', flexShrink:0 },
+  catLabel:       { fontSize:11, fontWeight:600, color:'rgba(255,255,255,0.4)', letterSpacing:'0.6px', textTransform:'uppercase', flex:1 },
+  catCount:       { fontSize:11, color:'rgba(255,255,255,0.25)', fontWeight:600 },
+  dragHandle:     { display:'inline-flex', alignItems:'center', justifyContent:'center', width:20, height:20, color:'rgba(255,255,255,0.2)', cursor:'grab', fontSize:14, flexShrink:0, touchAction:'none', userSelect:'none' },
+  itemRow:        { display:'flex', alignItems:'center', gap:8, padding:'10px 12px', borderRadius:12, marginBottom:4, border:'1px solid rgba(255,255,255,0.05)', background:'rgba(255,255,255,0.04)', transition:'opacity .2s' },
+  cartBtn:        { width:28, height:28, border:'none', background:'transparent', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, fontSize:16, transition:'color .2s', padding:0 },
+  itemContent:    { flex:1, display:'flex', flexDirection:'column', gap:1, minWidth:0 },
+  itemName:       { fontSize:15, color:'#fff', fontWeight:500, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' },
+  checkbox:       { width:22, height:22, borderRadius:7, border:'1.5px solid', background:'transparent', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 },
+  removeBtn:      { width:22, height:22, borderRadius:'50%', border:'none', background:'rgba(255,255,255,0.06)', color:'rgba(255,255,255,0.3)', cursor:'pointer', fontSize:16, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 },
+  finishBtn:      { width:'100%', padding:'14px', marginTop:12, borderRadius:16, border:'none', background:'linear-gradient(135deg,#818cf8 0%,#c084fc 100%)', color:'#fff', fontSize:14, fontWeight:700, cursor:'pointer', boxShadow:'0 4px 16px rgba(129,140,248,0.35)' },
+  fab:            { position:'absolute', bottom:24, right:20, width:56, height:56, borderRadius:'50%', background:'linear-gradient(135deg,#818cf8 0%,#c084fc 100%)', border:'none', color:'#fff', fontSize:28, cursor:'pointer', boxShadow:'0 8px 24px rgba(129,140,248,0.45)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:10 },
+  panel:          { position:'absolute', bottom:0, left:0, right:0, background:'rgba(20,16,36,0.97)', backdropFilter:'blur(20px)', borderTop:'1px solid rgba(255,255,255,0.08)', borderRadius:'24px 24px 0 0', padding:'20px 20px 36px', zIndex:20 },
+  panelInner:     { display:'flex', flexDirection:'column', gap:12 },
+  input:          { background:'rgba(255,255,255,0.07)', border:'1px solid rgba(255,255,255,0.12)', borderRadius:12, padding:'13px 16px', fontSize:15, color:'#fff', outline:'none', width:'100%', boxSizing:'border-box', fontFamily:'inherit' },
+  suggestions:    { position:'absolute', top:'100%', left:0, right:0, background:'rgba(22,18,42,0.99)', border:'1px solid rgba(255,255,255,0.1)', borderTop:'none', borderRadius:'0 0 12px 12px', overflow:'hidden', zIndex:30 },
+  suggestion:     { width:'100%', display:'flex', alignItems:'center', gap:10, padding:'10px 14px', background:'transparent', border:'none', borderBottom:'1px solid rgba(255,255,255,0.05)', color:'rgba(255,255,255,0.85)', fontSize:14, cursor:'pointer' },
+  catSelect:      { display:'flex', gap:6, flexWrap:'wrap' },
+  catBtn:         { width:38, height:38, borderRadius:10, fontSize:18, cursor:'pointer' },
+  actions:        { display:'flex', gap:8 },
+  cancel:         { flex:1, padding:'12px', borderRadius:12, border:'1px solid rgba(255,255,255,0.1)', background:'transparent', color:'rgba(255,255,255,0.5)', fontSize:14, fontWeight:600, cursor:'pointer', fontFamily:'inherit' },
+  confirm:        { flex:2, padding:'12px', borderRadius:12, border:'none', background:'linear-gradient(135deg,#818cf8 0%,#c084fc 100%)', color:'#fff', fontSize:14, fontWeight:700, cursor:'pointer', fontFamily:'inherit' },
+  infoSection:    { color:'#818cf8', fontWeight:700, fontSize:11, letterSpacing:'0.6px', textTransform:'uppercase', marginBottom:8, marginTop:4 },
   dragOverlayCat: { display:'flex', alignItems:'center', gap:6, padding:'8px 12px', borderRadius:10, background:'rgba(30,24,50,0.95)', border:'1px solid rgba(255,255,255,0.15)', backdropFilter:'blur(10px)', boxShadow:'0 8px 24px rgba(0,0,0,0.4)' },
 }
